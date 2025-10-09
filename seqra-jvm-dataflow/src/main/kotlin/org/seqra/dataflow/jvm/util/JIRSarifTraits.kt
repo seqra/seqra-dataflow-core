@@ -76,16 +76,15 @@ class JIRSarifTraits(
             getReadableInstance(statement) ?: "the calling object"
         }
 
-    override fun printArgumentNth(index: Int) =
-        "the ${getOrdinal(index + 1)} argument"
+    override fun printArgumentNth(index: Int, methodName: String?): String {
+        val ofMethod = methodName?.let { " of \"$it\"" } ?: ""
+        return "the ${getOrdinal(index + 1)} argument$ofMethod"
+    }
 
-    override fun printArgument(statement: JIRInst, index: Int): String {
-        if (statement is JIRCallExpr && index <= statement.args.size) {
-            val readableArg = tryGetReadableValue(statement, statement.args[index])
-            if (readableArg is ReadableValue.Value)
-                return readableArg.string
-        }
-        return printArgumentNth(index)
+    override fun printArgument(method: JIRMethod, index: Int): String {
+        val methodName = method.name
+        val paramName = method.parameters.getOrNull(index)?.name ?: return printArgumentNth(index, methodName)
+        return "\"$paramName\""
     }
 
     override fun getCallee(callExpr: CommonCallExpr): JIRMethod {
@@ -121,7 +120,7 @@ class JIRSarifTraits(
         if (expr !is JIRValue) return null
         return when (expr) {
             is JIRFieldRef -> ReadableValue.Value("\"${expr.instance ?: expr.field.enclosingType.jIRClass.simpleName}.${expr.field.name}\"")
-            is JIRArgument -> ReadableValue.Value(printArgument(statement, expr.index))
+            is JIRArgument -> ReadableValue.Value(printArgument(statement.location.method, expr.index))
             is JIRArrayAccess -> {
                 val arrName = tryGetReadableValue(statement, expr.array)
                 val elemName = tryGetReadableValue(statement, expr.index)

@@ -22,8 +22,8 @@ interface SarifTraits<out Method, out Statement>
     fun getLocals(expr: CommonExpr): List<LocalInfo>
     fun isRegister(name: String): Boolean
     fun getLocalName(md: @UnsafeVariance Method, index: Int): String?
-    fun printArgumentNth(index: Int): String
-    fun printArgument(statement: @UnsafeVariance Statement, index: Int): String
+    fun printArgumentNth(index: Int, methodName: String? = null): String
+    fun printArgument(method: @UnsafeVariance Method, index: Int): String
     fun printThis(statement: @UnsafeVariance Statement): String
 
     fun lineNumber(statement: @UnsafeVariance Statement): Int
