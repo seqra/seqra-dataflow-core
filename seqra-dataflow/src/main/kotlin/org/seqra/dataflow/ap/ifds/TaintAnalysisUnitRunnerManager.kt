@@ -16,10 +16,6 @@ import kotlinx.coroutines.newSingleThreadContext
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import mu.KotlinLogging
-import org.seqra.ir.api.common.CommonMethod
-import org.seqra.ir.api.common.cfg.CommonInst
-import org.seqra.dataflow.configuration.CommonTaintRulesProvider
-import org.seqra.util.analysis.ApplicationGraph
 import org.seqra.dataflow.ap.ifds.access.ApManager
 import org.seqra.dataflow.ap.ifds.access.ApMode
 import org.seqra.dataflow.ap.ifds.access.automata.AutomataApManager
@@ -31,15 +27,23 @@ import org.seqra.dataflow.ap.ifds.taint.TaintAnalysisContext
 import org.seqra.dataflow.ap.ifds.taint.TaintAnalysisUnitStorage
 import org.seqra.dataflow.ap.ifds.taint.TaintSinkTracker
 import org.seqra.dataflow.ap.ifds.taint.TaintSinkTracker.TaintVulnerability
-import org.seqra.dataflow.ap.ifds.trace.TraceResolutionContext
+import org.seqra.dataflow.ap.ifds.taint.TaintSinkTracker.TaintVulnerabilityWithEndFactRequirement
+import org.seqra.dataflow.ap.ifds.trace.ParallelProcessingContext
+import org.seqra.dataflow.ap.ifds.trace.ProcessingCancellation
 import org.seqra.dataflow.ap.ifds.trace.TraceResolver
-import org.seqra.dataflow.ap.ifds.trace.TraceResolverCancellation
+import org.seqra.dataflow.ap.ifds.trace.VulnerabilityChecker
+import org.seqra.dataflow.ap.ifds.trace.VulnerabilityChecker.VerifiedVulnerability
+import org.seqra.dataflow.ap.ifds.trace.VulnerabilityChecker.VulnerabilityVerificationStatus
 import org.seqra.dataflow.ap.ifds.trace.VulnerabilityWithTrace
+import org.seqra.dataflow.configuration.CommonTaintRulesProvider
 import org.seqra.dataflow.ifds.UnitResolver
 import org.seqra.dataflow.ifds.UnitType
 import org.seqra.dataflow.ifds.UnknownUnit
 import org.seqra.dataflow.util.MemoryManager
 import org.seqra.dataflow.util.percentToString
+import org.seqra.ir.api.common.CommonMethod
+import org.seqra.ir.api.common.cfg.CommonInst
+import org.seqra.util.analysis.ApplicationGraph
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ExecutorService
@@ -179,7 +183,7 @@ class TaintAnalysisUnitRunnerManager(
     ): List<VulnerabilityWithTrace> {
         if (vulnerabilities.isEmpty()) return emptyList()
 
-        val traceResolverCancellation = TraceResolverCancellation()
+        val traceResolverCancellation = ProcessingCancellation()
         val traceResolverMemoryManager = MemoryManager(TRACE_GENERATION_MEMORY_THRESHOLD) {
             traceResolverCancellation.cancel()
             logger.error { "Running low on memory, stopping trace resolution" }
@@ -199,40 +203,94 @@ class TaintAnalysisUnitRunnerManager(
         resolverParams: TraceResolver.Params,
         timeout: Duration,
         cancellationTimeout: Duration,
-        traceResolverCancellation: TraceResolverCancellation
+        traceResolverCancellation: ProcessingCancellation
     ): List<VulnerabilityWithTrace> {
         val traceResolver = TraceResolver(entryPoints, this, resolverParams, traceResolverCancellation)
+        val traceResolutionContext = object : ParallelProcessingContext<TaintVulnerability, VulnerabilityWithTrace>(
+            analyzerDispatcher, name = "Trace resolution", vulnerabilities
+        ) {
+            override fun createUnprocessed(item: TaintVulnerability) =
+                VulnerabilityWithTrace(item, trace = null)
+        }
 
-        val traceResolutionContext = TraceResolutionContext(analyzerDispatcher, vulnerabilities)
-        val traceResolutionComplete = traceResolutionContext.resolveAll { vulnerability ->
+        return traceResolutionContext.processAll(
+            progressScope, timeout, cancellationTimeout, traceResolverCancellation
+        ) { vulnerability ->
             val trace = traceResolver.resolveTrace(vulnerability)
             VulnerabilityWithTrace(vulnerability, trace)
         }
+    }
 
-        val progress = progressScope.launch {
-            while (isActive) {
-                delay(10.seconds)
-                logger.info { "Resolved ${traceResolutionContext.processed}/${vulnerabilities.size} traces" }
+    fun confirmVulnerabilities(
+        entryPoints: Set<CommonMethod>,
+        vulnerabilities: List<TaintVulnerability>,
+        timeout: Duration,
+        cancellationTimeout: Duration
+    ): List<TaintVulnerability> {
+        val confirmed = mutableListOf<TaintVulnerability>()
+        val unconfirmedVulnerabilities = mutableListOf<TaintVulnerabilityWithEndFactRequirement>()
+
+        for (vulnerability in vulnerabilities) {
+            when (vulnerability) {
+                is TaintSinkTracker.TaintVulnerabilityUnconditional -> confirmed.add(vulnerability)
+                is TaintSinkTracker.TaintVulnerabilityWithFact -> confirmed.add(vulnerability)
+                is TaintVulnerabilityWithEndFactRequirement -> unconfirmedVulnerabilities.add(vulnerability)
             }
         }
 
-        runBlocking {
-            val traceResolutionStatus = withTimeoutOrNull(timeout) { traceResolutionComplete.await() }
-            if (traceResolutionStatus == null) {
-                logger.warn { "Ifds trace resolution timeout" }
-            }
+        if (unconfirmedVulnerabilities.isEmpty()) return confirmed
 
-            withTimeoutOrNull(cancellationTimeout) {
-                traceResolverCancellation.cancel()
+        val vulnConfirmCancellation = ProcessingCancellation()
+        val vulnConfirmMemoryManager = MemoryManager(TRACE_GENERATION_MEMORY_THRESHOLD) {
+            vulnConfirmCancellation.cancel()
+            logger.error { "Running low on memory, stopping vulnerability confirmation" }
+        }
 
-                progress.cancelAndJoin()
-                traceResolutionContext.join()
+        val checkedVulnerabilities = vulnConfirmMemoryManager.runWithMemoryManager {
+            confirmVulnerabilitiesWithCancellation(
+                entryPoints, unconfirmedVulnerabilities, timeout, cancellationTimeout,
+                vulnConfirmCancellation
+            )
+        }
+
+        for (vulnerability in checkedVulnerabilities) {
+            when (vulnerability.status) {
+                VulnerabilityVerificationStatus.UNCONFIRMED -> {
+                    // skip
+                }
+
+                VulnerabilityVerificationStatus.CONFIRMED,
+                VulnerabilityVerificationStatus.UNKNOWN -> {
+                    confirmed.add(vulnerability.vuln)
+                }
             }
         }
 
-        return traceResolutionContext.resolvedTraces().also { result ->
-            logger.info { "Resolved ${result.size}/${vulnerabilities.size} traces" }
-        }
+        return confirmed
+    }
+
+    private fun confirmVulnerabilitiesWithCancellation(
+        entryPoints: Set<CommonMethod>,
+        vulnerabilities: List<TaintVulnerabilityWithEndFactRequirement>,
+        timeout: Duration,
+        cancellationTimeout: Duration,
+        vulnConfirmCancellation: ProcessingCancellation,
+    ): List<VerifiedVulnerability> {
+        val checker = VulnerabilityChecker(entryPoints, this, vulnConfirmCancellation)
+        val vulnConfirmationContext =
+            object : ParallelProcessingContext<TaintVulnerabilityWithEndFactRequirement, VerifiedVulnerability>(
+                analyzerDispatcher, name = "Vulnerability confirmation", vulnerabilities
+            ) {
+                override fun createUnprocessed(item: TaintVulnerabilityWithEndFactRequirement): VerifiedVulnerability =
+                    VerifiedVulnerability(
+                        item.vulnerability,
+                        status = VulnerabilityVerificationStatus.UNKNOWN
+                    )
+            }
+
+        return vulnConfirmationContext.processAll(
+            progressScope, timeout, cancellationTimeout, vulnConfirmCancellation
+        ) { checker.verifyVulnerability(it) }
     }
 
     fun methodCallers(method: CommonMethod): Set<UnitType> =

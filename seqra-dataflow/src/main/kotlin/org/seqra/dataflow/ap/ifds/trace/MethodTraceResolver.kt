@@ -38,6 +38,7 @@ import org.seqra.dataflow.configuration.CommonTaintAssignAction
 import org.seqra.dataflow.configuration.CommonTaintConfigurationItem
 import org.seqra.dataflow.configuration.CommonTaintConfigurationSource
 import org.seqra.dataflow.graph.MethodInstGraph
+import org.seqra.dataflow.util.ConcurrentReadSafeObject2IntMap
 import org.seqra.dataflow.util.ConcurrentReadSafeObject2IntMap.NO_VALUE
 import org.seqra.dataflow.util.add
 import org.seqra.dataflow.util.bitSetOf
@@ -307,7 +308,7 @@ class MethodTraceResolver(
 
     private val entryManager = EntryManager()
 
-    private inner class TraceBuilder(val finalEntryId: Int, val cancellation: TraceResolverCancellation) {
+    private inner class TraceBuilder(val finalEntryId: Int, val cancellation: ProcessingCancellation) {
         val startEntryIds = BitSet()
         val processedEntryIds = BitSet().also { it.set(finalEntryId) }
         val unprocessedEntryIds = IntArrayList().also { it.add(finalEntryId) }
@@ -351,6 +352,18 @@ class MethodTraceResolver(
     ): List<SummaryTrace> {
         val edges = facts.map { resolveIntraProceduralTraceEdge(statement, it, includeStatement) }
         return edges.traceToFactSummaryEdges(statement, includeStatement)
+    }
+
+    fun resolveIntraProceduralTraceFromCall(
+        statement: CommonInst,
+        calleeEntry: TraceEntry.MethodEntry
+    ): List<SummaryTrace> {
+        val traceEdges = calleeEntry.facts.flatMap { fact ->
+            val mappedFacts = methodCallFactMapper.mapMethodExitToReturnFlowFact(statement, fact)
+            mappedFacts.map { resolveIntraProceduralTraceEdge(statement, it, includeStatement = false) }
+        }
+
+        return traceEdges.traceToFactSummaryEdges(statement, includeStatement = false)
     }
 
     private fun List<List<TraceEdge>>.traceToFactSummaryEdges(
@@ -432,21 +445,9 @@ class MethodTraceResolver(
         }
     }
 
-    fun resolveIntraProceduralTraceFromCall(
-        statement: CommonInst,
-        calleeEntry: TraceEntry.MethodEntry
-    ): List<SummaryTrace> {
-        val traceEdges = calleeEntry.facts.flatMap { fact ->
-            val mappedFacts = methodCallFactMapper.mapMethodExitToReturnFlowFact(statement, fact)
-            mappedFacts.map { resolveIntraProceduralTraceEdge(statement, it, includeStatement = false) }
-        }
-
-        return traceEdges.traceToFactSummaryEdges(statement, includeStatement = false)
-    }
-
     fun resolveIntraProceduralFullTrace(
         summaryTrace: SummaryTrace,
-        cancellation: TraceResolverCancellation
+        cancellation: ProcessingCancellation
     ): List<FullTrace> {
         check(summaryTrace.method == methodEntryPoint) { "Incorrect summary trace" }
 
@@ -1145,54 +1146,19 @@ class MethodTraceResolver(
                 }
 
                 val currentInitialFacts = object2IntMap<InitialFactAp?>()
-                currentEdges.forEach { edge ->
-                    when (edge) {
-                        is TraceEdge.SourceTraceEdge -> {
-                            currentInitialFacts.getOrCreateIndex(null) { return@forEach }
-                        }
+                currentEdges.forEach { addEdgeInitialFacts(currentInitialFacts, it) }
 
-                        is TraceEdge.MethodTraceEdge -> {
-                            currentInitialFacts.getOrCreateIndex(edge.initialFact.replaceExclusions(ExclusionSet.Universe)) { return@forEach }
-                        }
-
-                        is TraceEdge.MethodTraceNDEdge -> edge.initialFacts.forEachIndexed { _, it ->
-                            currentInitialFacts.getOrCreateIndex(it.replaceExclusions(ExclusionSet.Universe)) { return@forEachIndexed }
-                        }
-                    }
-                }
+                val currentInitialFactsSet = BitSet(currentInitialFacts.size)
+                currentInitialFactsSet.set(0, currentInitialFacts.size)
 
                 allFactEdges.cartesianProductMapTo { edgeGroup ->
-                    val unmatchedInitials = BitSet(currentInitialFacts.size)
-                    unmatchedInitials.set(0, currentInitialFacts.size)
-
+                    var matchedInitials = BitSet(currentInitialFacts.size)
                     for (edge in edgeGroup) {
-                        when (edge) {
-                            is TraceEdge.SourceTraceEdge -> {
-                                val idx = currentInitialFacts.getInt(null)
-                                if (idx != NO_VALUE) {
-                                    unmatchedInitials.clear(idx)
-                                }
-                            }
-
-                            is TraceEdge.MethodTraceEdge -> {
-                                val idx = currentInitialFacts.getInt(edge.initialFact.replaceExclusions(ExclusionSet.Universe))
-                                if (idx != NO_VALUE) {
-                                    unmatchedInitials.clear(idx)
-                                }
-                            }
-
-                            is TraceEdge.MethodTraceNDEdge -> {
-                                edge.initialFacts.forEach {
-                                    val idx = currentInitialFacts.getInt(it.replaceExclusions(ExclusionSet.Universe))
-                                    if (idx != NO_VALUE) {
-                                        unmatchedInitials.clear(idx)
-                                    }
-                                }
-                            }
-                        }
+                        matchedInitials = addEdgeInitialFactsIfRegistered(currentInitialFacts, edge, matchedInitials)
+                            ?: return@cartesianProductMapTo
                     }
 
-                    if (!unmatchedInitials.isEmpty) {
+                    if (matchedInitials != currentInitialFactsSet) {
                         return@cartesianProductMapTo
                     }
 
@@ -1202,6 +1168,45 @@ class MethodTraceResolver(
                 return result
             }
         }
+    }
+
+    private fun addEdgeInitialFacts(
+        initialFactIndex: ConcurrentReadSafeObject2IntMap<InitialFactAp?>,
+        edge: TraceEdge,
+    ) = when (edge) {
+        is TraceEdge.SourceTraceEdge -> addEdgeInitialFact(initialFactIndex, fact = null)
+        is TraceEdge.MethodTraceEdge -> addEdgeInitialFact(initialFactIndex, edge.initialFact)
+        is TraceEdge.MethodTraceNDEdge -> edge.initialFacts.forEach { addEdgeInitialFact(initialFactIndex, it) }
+    }
+
+    private fun addEdgeInitialFact(
+        initialFactIndex: ConcurrentReadSafeObject2IntMap<InitialFactAp?>,
+        fact: InitialFactAp?,
+    ) {
+        initialFactIndex.getOrCreateIndex(fact?.replaceExclusions(ExclusionSet.Universe)) { return }
+    }
+
+    private fun addEdgeInitialFactsIfRegistered(
+        initialFactIndex: ConcurrentReadSafeObject2IntMap<InitialFactAp?>,
+        edge: TraceEdge,
+        factSet: BitSet,
+    ): BitSet? = when (edge) {
+        is TraceEdge.SourceTraceEdge -> addEdgeInitialFactIfRegistered(initialFactIndex, fact = null, factSet)
+        is TraceEdge.MethodTraceEdge -> addEdgeInitialFactIfRegistered(initialFactIndex, edge.initialFact, factSet)
+        is TraceEdge.MethodTraceNDEdge -> edge.initialFacts.fold(factSet as BitSet?) { acc, fact ->
+            acc?.let { addEdgeInitialFactIfRegistered(initialFactIndex, fact, it) }
+        }
+    }
+
+    private fun addEdgeInitialFactIfRegistered(
+        initialFactIndex: ConcurrentReadSafeObject2IntMap<InitialFactAp?>,
+        fact: InitialFactAp?,
+        factSet: BitSet,
+    ): BitSet? {
+        val idx = initialFactIndex.getInt(fact?.replaceExclusions(ExclusionSet.Universe))
+        if (idx == NO_VALUE) return null
+        factSet.set(idx)
+        return factSet
     }
 
     private fun MutableList<CallSummary>.resolveCallPassSummary(

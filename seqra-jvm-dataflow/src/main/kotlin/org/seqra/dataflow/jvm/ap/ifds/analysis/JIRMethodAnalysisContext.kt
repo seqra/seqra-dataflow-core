@@ -3,6 +3,7 @@ package org.seqra.dataflow.jvm.ap.ifds.analysis
 import org.seqra.dataflow.ap.ifds.analysis.MethodAnalysisContext
 import org.seqra.dataflow.ap.ifds.analysis.MethodCallFactMapper
 import org.seqra.dataflow.ap.ifds.MethodEntryPoint
+import org.seqra.dataflow.ap.ifds.TaintMarkAccessor
 import org.seqra.dataflow.ap.ifds.taint.TaintAnalysisContext
 import org.seqra.dataflow.jvm.ap.ifds.JIRFactTypeChecker
 import org.seqra.dataflow.jvm.ap.ifds.JIRLocalAliasAnalysis
@@ -18,4 +19,6 @@ class JIRMethodAnalysisContext(
 ) : MethodAnalysisContext {
     override val methodCallFactMapper: MethodCallFactMapper
         get() = JIRMethodCallFactMapper
+
+    val taintMarksAssignedOnMethodEnter = hashSetOf<TaintMarkAccessor>()
 }

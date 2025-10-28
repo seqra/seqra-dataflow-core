@@ -1,5 +1,6 @@
 package org.seqra.dataflow.ap.ifds.analysis
 
+import org.seqra.dataflow.ap.ifds.Edge
 import org.seqra.dataflow.ap.ifds.ExclusionSet
 import org.seqra.dataflow.ap.ifds.FactTypeChecker
 import org.seqra.dataflow.ap.ifds.MethodSummaryEdgeApplicationUtils.SummaryEdgeApplication
@@ -8,6 +9,7 @@ import org.seqra.dataflow.ap.ifds.MethodSummaryEdgeApplicationUtils.SummaryEdgeA
 import org.seqra.dataflow.ap.ifds.access.FinalFactAp
 import org.seqra.dataflow.ap.ifds.access.InitialFactAp
 import org.seqra.dataflow.ap.ifds.analysis.MethodSequentFlowFunction.Sequent
+import org.seqra.dataflow.ap.ifds.analysis.MethodSequentFlowFunction.TraceInfo
 
 interface MethodCallSummaryHandler {
     val factTypeChecker: FactTypeChecker
@@ -18,7 +20,9 @@ interface MethodCallSummaryHandler {
         if (summaryFact == null) return setOf(Sequent.ZeroToZero)
 
         val summaryExitFacts = mapMethodExitToReturnFlowFact(summaryFact)
-        return summaryExitFacts.mapTo(hashSetOf()) { Sequent.ZeroToFact(it) }
+        return summaryExitFacts.mapTo(hashSetOf()) {
+            Sequent.ZeroToFact(it, TraceInfo.ApplySummary)
+        }
     }
 
     fun handleZeroToFact(
@@ -34,7 +38,7 @@ interface MethodCallSummaryHandler {
             "Incorrect refinement"
         }
 
-        Sequent.ZeroToFact(summaryFactAp)
+        Sequent.ZeroToFact(summaryFactAp, TraceInfo.ApplySummary)
     }
 
     fun handleFactToFact(
@@ -47,8 +51,10 @@ interface MethodCallSummaryHandler {
         summaryEffect,
         summaryFact
     ) { initialFactRefinement: ExclusionSet?, summaryFactAp: FinalFactAp ->
-        Sequent.FactToFact(initialFactAp.refine(initialFactRefinement), summaryFactAp)
+        Sequent.FactToFact(initialFactAp.refine(initialFactRefinement), summaryFactAp, TraceInfo.ApplySummary)
     }
+
+    fun prepareFactToFactSummary(summaryEdge: Edge.FactToFact): Edge.FactToFact? = summaryEdge
 
     fun handleNDFactToFact(
         initialFacts: Set<InitialFactAp>,
@@ -64,8 +70,14 @@ interface MethodCallSummaryHandler {
             "Incorrect refinement"
         }
 
-        Sequent.NDFactToFact(initialFacts, summaryFactAp)
+        Sequent.NDFactToFact(
+            initialFacts.mapTo(hashSetOf()) { it.refine(initialFactRefinement) },
+            summaryFactAp,
+            TraceInfo.ApplySummary
+        )
     }
+
+    fun prepareNDFactToFactSummary(summaryEdge: Edge.NDFactToFact): Edge.NDFactToFact? = summaryEdge
 
     fun InitialFactAp.refine(exclusionSet: ExclusionSet?) =
         if (exclusionSet == null) this else replaceExclusions(exclusionSet)

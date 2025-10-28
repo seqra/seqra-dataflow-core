@@ -1,9 +1,6 @@
 package org.seqra.dataflow.jvm.ap.ifds.trace
 
 import org.seqra.dataflow.ap.ifds.AccessPathBase
-import org.seqra.dataflow.ap.ifds.ExclusionSet
-import org.seqra.dataflow.ap.ifds.FinalAccessor
-import org.seqra.dataflow.ap.ifds.TaintMarkAccessor
 import org.seqra.dataflow.ap.ifds.access.ApManager
 import org.seqra.dataflow.ap.ifds.access.InitialFactAp
 import org.seqra.dataflow.ap.ifds.analysis.MethodCallFactMapper
@@ -14,10 +11,9 @@ import org.seqra.dataflow.ap.ifds.trace.MethodCallPrecondition.PassRuleCondition
 import org.seqra.dataflow.ap.ifds.trace.MethodCallPrecondition.PreconditionFactsForInitialFact
 import org.seqra.dataflow.ap.ifds.trace.TaintRulePrecondition
 import org.seqra.dataflow.ap.ifds.trace.TaintRulePrecondition.PassRuleCondition
-import org.seqra.dataflow.configuration.jvm.ContainsMark
 import org.seqra.dataflow.configuration.jvm.CopyAllMarks
 import org.seqra.dataflow.configuration.jvm.CopyMark
-import org.seqra.dataflow.configuration.jvm.TaintMark
+import org.seqra.dataflow.configuration.jvm.TaintMethodSource
 import org.seqra.dataflow.jvm.ap.ifds.CallPositionToJIRValueResolver
 import org.seqra.dataflow.jvm.ap.ifds.JIRMarkAwareConditionExpr
 import org.seqra.dataflow.jvm.ap.ifds.JIRMarkAwareConditionRewriter
@@ -25,16 +21,11 @@ import org.seqra.dataflow.jvm.ap.ifds.JIRMethodCallFactMapper
 import org.seqra.dataflow.jvm.ap.ifds.MethodFlowFunctionUtils
 import org.seqra.dataflow.jvm.ap.ifds.analysis.JIRMethodAnalysisContext
 import org.seqra.dataflow.jvm.ap.ifds.analysis.forEachPossibleAliasAtStatement
-import org.seqra.dataflow.jvm.ap.ifds.removeTrueLiterals
 import org.seqra.dataflow.jvm.ap.ifds.taint.InitialFactReader
-import org.seqra.dataflow.jvm.ap.ifds.taint.PositionAccess
 import org.seqra.dataflow.jvm.ap.ifds.taint.TaintPassActionPreconditionEvaluator
 import org.seqra.dataflow.jvm.ap.ifds.taint.TaintRulesProvider
 import org.seqra.dataflow.jvm.ap.ifds.taint.TaintSourceActionPreconditionEvaluator
-import org.seqra.dataflow.jvm.ap.ifds.taint.mkInitialAccessPath
-import org.seqra.dataflow.jvm.ap.ifds.taint.resolveAp
 import org.seqra.dataflow.jvm.util.callee
-import org.seqra.dataflow.util.cartesianProductMapTo
 import org.seqra.ir.api.jvm.cfg.JIRCallExpr
 import org.seqra.ir.api.jvm.cfg.JIRImmediate
 import org.seqra.ir.api.jvm.cfg.JIRInst
@@ -128,33 +119,22 @@ class JIRMethodCallPrecondition(
         )
 
         for (rule in taintConfig.sourceRulesForMethod(method, statement)) {
-            val assignedMarks = rule.actionsAfter.maybeFlatMap {
-                sourcePreconditionEvaluator.evaluate(rule, it)
-            }
-            if (assignedMarks.isNone) continue
-
-            val sourceActions = assignedMarks.getOrThrow().mapTo(hashSetOf()) { it.second }
-
-            val simplifiedCondition = conditionRewriter.rewrite(rule.condition)
-
-            val simplifiedExpr = when {
-                simplifiedCondition.isFalse -> continue
-                simplifiedCondition.isTrue -> null
-                else -> simplifiedCondition.expr
-            }
-
-            // We always treat negated mark condition as satisfied
-            val exprWithoutNegations = simplifiedExpr?.removeNegated()
-            if (exprWithoutNegations == null) {
-                this += TaintRulePrecondition.Source(rule, sourceActions)
-                continue
-            }
-
-            this += TaintRulePrecondition.Pass(
-                rule, sourceActions,
-                JIRPassRuleCondition.Expr(exprWithoutNegations)
-            )
+            evaluateSourceRulePrecondition(rule, sourcePreconditionEvaluator, conditionRewriter)
         }
+    }
+
+    private fun MutableList<TaintRulePrecondition>.evaluateSourceRulePrecondition(
+        rule: TaintMethodSource,
+        sourcePreconditionEvaluator: TaintSourceActionPreconditionEvaluator,
+        conditionRewriter: JIRMarkAwareConditionRewriter,
+    ) {
+        return evaluateSourceRulePrecondition(
+            rule,
+            sourcePreconditionEvaluator,
+            conditionRewriter,
+            { r, a -> this += TaintRulePrecondition.Source(r, a) },
+            { r, a, e -> this += TaintRulePrecondition.Pass(r, a, JIRPassRuleCondition.Expr(e)) }
+        )
     }
 
     private fun MutableList<TaintRulePrecondition>.factPassRulePrecondition(
@@ -212,8 +192,6 @@ class JIRMethodCallPrecondition(
         }
     }
 
-    private fun JIRMarkAwareConditionExpr.removeNegated() = removeTrueLiterals { it.negated }
-
     override fun resolvePassRuleCondition(precondition: PassRuleCondition): List<PassRuleConditionFacts> {
         precondition as JIRPassRuleCondition
 
@@ -235,44 +213,8 @@ class JIRMethodCallPrecondition(
         }
     }
 
-    private fun ContainsMark.preconditionFact(): InitialFactAp {
-        return createPositionWithTaintMark(position.resolveAp(), mark)
-    }
-
-    private fun createPositionWithTaintMark(position: PositionAccess, mark: TaintMark): InitialFactAp {
-        val positionWithMark = PositionAccess.Complex(position, TaintMarkAccessor(mark.name))
-        val finalPositionWithMark = PositionAccess.Complex(positionWithMark, FinalAccessor)
-        return createPosition(finalPositionWithMark)
-    }
-
-    private fun createPosition(position: PositionAccess): InitialFactAp {
-        var normalizedPosition = position
-        if (position is PositionAccess.Complex && position.accessor is FinalAccessor) {
-            // mkInitialAccessPath starts with final ap
-            normalizedPosition = position.base
+    private fun JIRMarkAwareConditionExpr.preconditionDnf(): List<PreconditionCube> =
+        preconditionDnf(apManager) { preconditionFact ->
+            methodCallFactMapper.mapMethodExitToReturnFlowFact(statement, preconditionFact)
         }
-        return apManager.mkInitialAccessPath(normalizedPosition, ExclusionSet.Universe)
-    }
-
-    private data class PreconditionCube(val facts: Set<InitialFactAp>)
-
-    private fun JIRMarkAwareConditionExpr.preconditionDnf(): List<PreconditionCube> = when (this) {
-        is JIRMarkAwareConditionExpr.Literal -> {
-            val preconditionFact = condition.preconditionFact()
-            val mappedFacts = methodCallFactMapper.mapMethodExitToReturnFlowFact(statement, preconditionFact)
-            mappedFacts.map { PreconditionCube(setOf(it)) }
-        }
-
-        is JIRMarkAwareConditionExpr.Or -> args.flatMap { it.preconditionDnf() }
-        is JIRMarkAwareConditionExpr.And -> {
-            val result = mutableListOf<PreconditionCube>()
-            val cubeLists = args.map { it.preconditionDnf() }
-            cubeLists.cartesianProductMapTo { cubes ->
-                val facts = hashSetOf<InitialFactAp>()
-                cubes.flatMapTo(facts) { it.facts }
-                result += PreconditionCube(facts)
-            }
-            result
-        }
-    }
 }
