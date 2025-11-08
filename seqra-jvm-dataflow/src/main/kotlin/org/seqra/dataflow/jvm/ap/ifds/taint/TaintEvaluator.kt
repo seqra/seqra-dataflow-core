@@ -1,5 +1,6 @@
 package org.seqra.dataflow.jvm.ap.ifds.taint
 
+import mu.KotlinLogging
 import org.seqra.dataflow.ap.ifds.AccessPathBase
 import org.seqra.dataflow.ap.ifds.Accessor
 import org.seqra.dataflow.ap.ifds.AnyAccessor
@@ -172,7 +173,8 @@ class TaintCleanActionEvaluator {
         if (!fact.containsPosition(from)) return evc
 
         if (from !is PositionAccess.Simple) {
-            TODO("Remove from complex: $from")
+            logger.error("Unsupported Remove from complex: $from")
+            return evc
         }
 
         val actionInfo = EvaluatedCleanAction.ActionInfo(rule, action)
@@ -190,15 +192,43 @@ class TaintCleanActionEvaluator {
 
         if (!fact.containsPositionWithTaintMark(from, markRestriction)) return evc
 
-        if (from !is PositionAccess.Simple) {
-            TODO("Remove from complex: $from")
+        val cleanAccessors = from.accessorList() + TaintMarkAccessor(markRestriction.name)
+        val cleanedFacts = clearPosition(cleanAccessors, fact.factAp)
+
+        if (cleanedFacts.size > 1) {
+            logger.error("Unsupported Remove from complex: $from")
+            return evc
         }
 
-        val factWithoutFinal = fact.factAp.clearAccessor(TaintMarkAccessor(markRestriction.name))
-        val resultFact = factWithoutFinal?.let { fact.replaceFact(it) }
-
+        val cleanedFact = cleanedFacts.firstOrNull()
+        val resultFact = cleanedFact?.let { fact.replaceFact(it) }
         val actionInfo = EvaluatedCleanAction.ActionInfo(rule, action)
         return EvaluatedCleanAction(resultFact, actionInfo, evc)
+    }
+
+    private fun clearPosition(accessors: List<Accessor>, fact: FinalFactAp): List<FinalFactAp> {
+        val head = accessors.first()
+        val tail = accessors.drop(1)
+        if (tail.isEmpty()) {
+            return listOfNotNull(fact.clearAccessor(head))
+        }
+
+        val remaining = listOfNotNull(fact.clearAccessor(head))
+
+        val child = fact.readAccessor(head)
+        val cleanChild = child?.let { clearPosition(tail, it) }
+        val cleanChildWithAccessor = cleanChild?.map { it.prependAccessor(head) }
+
+        return remaining + cleanChildWithAccessor.orEmpty()
+    }
+
+    private fun PositionAccess.accessorList(): List<Accessor> = when (this) {
+        is PositionAccess.Simple -> emptyList()
+        is PositionAccess.Complex -> base.accessorList() + accessor
+    }
+
+    companion object {
+        private val logger = KotlinLogging.logger {}
     }
 }
 

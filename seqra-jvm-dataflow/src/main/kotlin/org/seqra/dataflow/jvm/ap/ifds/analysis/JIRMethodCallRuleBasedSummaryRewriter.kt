@@ -1,17 +1,18 @@
 package org.seqra.dataflow.jvm.ap.ifds.analysis
 
-import mu.KotlinLogging
 import org.seqra.dataflow.ap.ifds.access.ApManager
 import org.seqra.dataflow.ap.ifds.access.FinalFactAp
-import org.seqra.dataflow.configuration.jvm.AssignMark
-import org.seqra.dataflow.configuration.jvm.ContainsMark
+import org.seqra.dataflow.configuration.jvm.Position
+import org.seqra.dataflow.configuration.jvm.RemoveMark
+import org.seqra.dataflow.configuration.jvm.TaintConfigurationItem
+import org.seqra.dataflow.configuration.jvm.TaintMark
 import org.seqra.dataflow.jvm.ap.ifds.CallPositionToJIRValueResolver
-import org.seqra.dataflow.jvm.ap.ifds.JIRMarkAwareConditionExpr
 import org.seqra.dataflow.jvm.ap.ifds.JIRMarkAwareConditionRewriter
-import org.seqra.dataflow.jvm.ap.ifds.removeTrueLiterals
+import org.seqra.dataflow.jvm.ap.ifds.taint.EvaluatedCleanAction
 import org.seqra.dataflow.jvm.ap.ifds.taint.FinalFactReader
+import org.seqra.dataflow.jvm.ap.ifds.taint.TaintCleanActionEvaluator
 import org.seqra.dataflow.jvm.ap.ifds.taint.TaintRulesProvider
-import org.seqra.dataflow.jvm.ap.ifds.taint.resolveAp
+import org.seqra.dataflow.jvm.ap.ifds.taint.UserDefinedRuleInfo
 import org.seqra.ir.api.jvm.cfg.JIRAssignInst
 import org.seqra.ir.api.jvm.cfg.JIRImmediate
 import org.seqra.ir.api.jvm.cfg.JIRInst
@@ -37,61 +38,56 @@ class JIRMethodCallRuleBasedSummaryRewriter(
         )
     }
 
-    private val conditionedActions: List<Pair<List<AssignMark>, JIRMarkAwareConditionExpr?>> by lazy {
+    private data class UserRuleDefinedAction(
+        val rule: TaintConfigurationItem,
+        val positions: List<Position>,
+        val controlledMarks: Set<String>
+    )
+
+    private val userRuleDefinedActions: List<UserRuleDefinedAction> by lazy {
         val method = callExpr.method.method
-        val sourceRules = config.sourceRulesForMethod(method, statement).toList()
-        if (sourceRules.isEmpty()) return@lazy emptyList()
 
-        val conditionedActions = mutableListOf<Pair<List<AssignMark>, JIRMarkAwareConditionExpr?>>()
+        val result = mutableListOf<UserRuleDefinedAction>()
+        for (sourceRule in config.sourceRulesForMethod(method, statement)) {
+            val ruleInfo = sourceRule.info as? UserDefinedRuleInfo ?: continue
 
-        for (rule in sourceRules) {
-            val ruleCondition = rule.condition
-            val simplifiedCondition = conditionRewriter.rewrite(ruleCondition)
-            val conditionExpr = when {
-                simplifiedCondition.isFalse -> continue
-                simplifiedCondition.isTrue -> null
-                else -> simplifiedCondition.expr
-            }
+            val simplifiedCondition = conditionRewriter.rewrite(sourceRule.condition)
+            if (simplifiedCondition.isFalse) continue
 
-            conditionedActions.add(rule.actionsAfter to conditionExpr)
+            val positions = sourceRule.actionsAfter.map { it.position }
+            result += UserRuleDefinedAction(sourceRule, positions, ruleInfo.relevantTaintMarks)
         }
 
-        conditionedActions
+        for (cleanRule in config.cleanerRulesForMethod(method, statement)) {
+            val ruleInfo = cleanRule.info as? UserDefinedRuleInfo ?: continue
+
+            val simplifiedCondition = conditionRewriter.rewrite(cleanRule.condition)
+            if (simplifiedCondition.isFalse) continue
+
+            val positions = cleanRule.actionsAfter.filterIsInstance<RemoveMark>().map { it.position }
+            result += UserRuleDefinedAction(cleanRule, positions, ruleInfo.relevantTaintMarks)
+        }
+
+        result
     }
 
     fun rewriteSummaryFact(fact: FinalFactAp): Pair<FinalFactAp, FinalFactReader>? {
-        val factReader = FinalFactReader(fact, apManager)
-        for ((actions, cond) in conditionedActions) {
-            val relevantPositiveConditions = hashSetOf<ContainsMark>()
-            cond?.removeTrueLiterals {
-                if (!it.negated) {
-                    relevantPositiveConditions.add(it.condition)
-                }
-                false
-            }
+        val startFactReader = FinalFactReader(fact, apManager)
 
-            val allRelevantMarks = relevantPositiveConditions.mapTo(hashSetOf()) { it.mark }
+        val cleanEvaluator = TaintCleanActionEvaluator()
+        var cleanedFact = EvaluatedCleanAction.initial(startFactReader)
 
-            for (action in actions) {
-                val markToExclude = allRelevantMarks.toHashSet()
-                markToExclude.remove(action.mark)
-
-                val pos = action.position.resolveAp()
-                for (mark in markToExclude) {
-                    if (!factReader.containsPositionWithTaintMark(pos, mark)) {
-                        continue
-                    }
-
-                    logger.error("Summary fact handled unproperly due to conflict with rule")
-                    return null
+        for (ruleDefinedAction in userRuleDefinedActions) {
+            val markToExclude = ruleDefinedAction.controlledMarks.map { TaintMark(it) }
+            for (mark in markToExclude) {
+                for (pos in ruleDefinedAction.positions) {
+                    val removeAction = RemoveMark(mark, pos)
+                    cleanedFact = cleanEvaluator.evaluate(cleanedFact, ruleDefinedAction.rule, removeAction)
                 }
             }
         }
 
-        return fact to factReader
-    }
-
-    companion object {
-        private val logger = KotlinLogging.logger {}
+        val resultFact = cleanedFact.fact ?: return null
+        return resultFact.factAp to resultFact
     }
 }
