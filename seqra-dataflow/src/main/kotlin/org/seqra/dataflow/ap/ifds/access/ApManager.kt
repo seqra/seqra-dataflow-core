@@ -1,11 +1,13 @@
 package org.seqra.dataflow.ap.ifds.access
 
 import org.seqra.dataflow.ap.ifds.AccessPathBase
+import org.seqra.dataflow.ap.ifds.Accessor
 import org.seqra.dataflow.ap.ifds.Edge
 import org.seqra.dataflow.ap.ifds.ExclusionSet
 import org.seqra.dataflow.ap.ifds.FactToFactEdgeBuilder
 import org.seqra.dataflow.ap.ifds.LanguageManager
 import org.seqra.dataflow.ap.ifds.NDFactToFactEdgeBuilder
+import org.seqra.dataflow.ap.ifds.SideEffectSummary.FactSideEffectSummary
 import org.seqra.dataflow.ap.ifds.SummaryEdgeSubscriptionManager.FactEdgeSummarySubscription
 import org.seqra.dataflow.ap.ifds.SummaryEdgeSubscriptionManager.FactNDEdgeSummarySubscription
 import org.seqra.dataflow.ap.ifds.SummaryEdgeSubscriptionManager.ZeroEdgeSummarySubscription
@@ -15,6 +17,8 @@ import org.seqra.dataflow.ap.ifds.serialization.SummarySerializationContext
 import org.seqra.ir.api.common.cfg.CommonInst
 
 interface ApManager {
+    val anyAccessorUnrollStrategy: AnyAccessorUnrollStrategy
+
     fun initialFactAbstraction(methodInitialStatement: CommonInst): InitialFactAbstraction
 
     fun methodEdgesFinalApSet(methodInitialStatement: CommonInst, maxInstIdx: Int, languageManager: LanguageManager): MethodEdgesFinalApSet
@@ -27,6 +31,7 @@ interface ApManager {
     fun methodFinalApSummariesStorage(methodInitialStatement: CommonInst): MethodFinalApSummariesStorage
     fun methodInitialToFinalApSummariesStorage(methodInitialStatement: CommonInst): MethodInitialToFinalApSummariesStorage
     fun methodNDInitialToFinalApSummariesStorage(methodInitialStatement: CommonInst): MethodNDInitialToFinalApSummariesStorage
+    fun factSideEffectSummariesApStorage(methodInitialStatement: CommonInst): FactSideEffectSummariesApStorage
 
     fun mostAbstractInitialAp(base: AccessPathBase): InitialFactAp
     fun mostAbstractFinalAp(base: AccessPathBase): FinalFactAp
@@ -37,6 +42,16 @@ interface ApManager {
     fun createFinalInitialAp(base: AccessPathBase, exclusions: ExclusionSet): InitialFactAp
 
     fun createSerializer(context: SummarySerializationContext): ApSerializer
+}
+
+interface AnyAccessorUnrollStrategy {
+    fun unrollAccessor(accessor: Accessor): Boolean
+
+    object AnyAccessorDisabled : AnyAccessorUnrollStrategy {
+        override fun unrollAccessor(accessor: Accessor): Boolean {
+            error("Any accessors disabled")
+        }
+    }
 }
 
 interface InitialFactAbstraction {
@@ -104,6 +119,11 @@ interface SideEffectRequirementApStorage {
     fun add(requirements: List<InitialFactAp>): List<InitialFactAp>
     fun filterTo(dst: MutableList<InitialFactAp>, fact: FinalFactAp)
     fun collectAllRequirementsTo(dst: MutableList<InitialFactAp>)
+}
+
+interface FactSideEffectSummariesApStorage {
+    fun add(sideEffects: List<FactSideEffectSummary>, added: MutableList<FactSideEffectSummary>)
+    fun filterTaintedTo(dst: MutableList<FactSideEffectSummary>, pattern: FinalFactAp?)
 }
 
 interface MethodFinalApSummariesStorage {

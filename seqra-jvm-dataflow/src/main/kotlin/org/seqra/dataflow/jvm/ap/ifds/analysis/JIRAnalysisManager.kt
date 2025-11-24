@@ -2,6 +2,7 @@ package org.seqra.dataflow.jvm.ap.ifds.analysis
 
 import mu.KLogger
 import org.seqra.dataflow.ap.ifds.AccessPathBase
+import org.seqra.dataflow.ap.ifds.AnalysisRunner
 import org.seqra.dataflow.ap.ifds.MethodEntryPoint
 import org.seqra.dataflow.ap.ifds.TaintAnalysisManager
 import org.seqra.dataflow.ap.ifds.TaintAnalysisUnitRunner
@@ -11,6 +12,7 @@ import org.seqra.dataflow.ap.ifds.analysis.MethodAnalysisContext
 import org.seqra.dataflow.ap.ifds.analysis.MethodCallFlowFunction
 import org.seqra.dataflow.ap.ifds.analysis.MethodCallSummaryHandler
 import org.seqra.dataflow.ap.ifds.analysis.MethodSequentFlowFunction
+import org.seqra.dataflow.ap.ifds.analysis.MethodSideEffectSummaryHandler
 import org.seqra.dataflow.ap.ifds.analysis.MethodStartFlowFunction
 import org.seqra.dataflow.ap.ifds.taint.TaintAnalysisContext
 import org.seqra.dataflow.ap.ifds.trace.MethodCallPrecondition
@@ -158,6 +160,18 @@ class JIRAnalysisManager(
         jIRDowncast<JIRMethodAnalysisContext>(analysisContext)
 
         return JIRMethodCallSummaryHandler(statement, analysisContext, apManager)
+    }
+
+    override fun getMethodSideEffectSummaryHandler(
+        apManager: ApManager,
+        analysisContext: MethodAnalysisContext,
+        statement: CommonInst,
+        runner: AnalysisRunner
+    ): MethodSideEffectSummaryHandler {
+        jIRDowncast<JIRInst>(statement)
+        jIRDowncast<JIRMethodAnalysisContext>(analysisContext)
+
+        return JIRMethodSideEffectHandler(runner)
     }
 
     override fun getMethodCallPrecondition(

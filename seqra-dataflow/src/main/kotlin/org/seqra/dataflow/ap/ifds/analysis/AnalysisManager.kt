@@ -7,6 +7,7 @@ import org.seqra.ir.api.common.cfg.CommonInst
 import org.seqra.ir.api.common.cfg.CommonValue
 import org.seqra.util.analysis.ApplicationGraph
 import org.seqra.dataflow.ap.ifds.AccessPathBase
+import org.seqra.dataflow.ap.ifds.AnalysisRunner
 import org.seqra.dataflow.ap.ifds.LanguageManager
 import org.seqra.dataflow.ap.ifds.MethodEntryPoint
 import org.seqra.dataflow.ap.ifds.TaintAnalysisUnitRunner
@@ -74,6 +75,13 @@ interface AnalysisManager: LanguageManager {
         analysisContext: MethodAnalysisContext,
         statement: CommonInst,
     ): MethodCallSummaryHandler
+
+    fun getMethodSideEffectSummaryHandler(
+        apManager: ApManager,
+        analysisContext: MethodAnalysisContext,
+        statement: CommonInst,
+        runner: AnalysisRunner
+    ): MethodSideEffectSummaryHandler
 
     fun isReachable(
         apManager: ApManager,

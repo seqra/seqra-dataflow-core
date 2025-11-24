@@ -5,6 +5,7 @@ import org.seqra.dataflow.ap.ifds.ExclusionSet
 import org.seqra.dataflow.ap.ifds.ExclusionSet.Empty
 import org.seqra.dataflow.ap.ifds.FinalAccessor
 import org.seqra.dataflow.ap.ifds.LanguageManager
+import org.seqra.dataflow.ap.ifds.access.AnyAccessorUnrollStrategy
 import org.seqra.dataflow.ap.ifds.access.ApManager
 import org.seqra.dataflow.ap.ifds.access.FinalFactAp
 import org.seqra.dataflow.ap.ifds.access.InitialFactAbstraction
@@ -17,12 +18,15 @@ import org.seqra.dataflow.ap.ifds.access.MethodFinalApSummariesStorage
 import org.seqra.dataflow.ap.ifds.access.MethodInitialToFinalApSummariesStorage
 import org.seqra.dataflow.ap.ifds.access.MethodNDInitialToFinalApSummariesStorage
 import org.seqra.dataflow.ap.ifds.access.SideEffectRequirementApStorage
+import org.seqra.dataflow.ap.ifds.access.FactSideEffectSummariesApStorage
 import org.seqra.dataflow.ap.ifds.access.cactus.AccessCactus.AccessNode
 import org.seqra.dataflow.ap.ifds.serialization.ApSerializer
 import org.seqra.dataflow.ap.ifds.serialization.SummarySerializationContext
 import org.seqra.ir.api.common.cfg.CommonInst
 
-object CactusApManager : ApManager {
+class CactusApManager(
+    override val anyAccessorUnrollStrategy: AnyAccessorUnrollStrategy
+) : ApManager {
     override fun initialFactAbstraction(methodInitialStatement: CommonInst): InitialFactAbstraction =
         CactusInitialFactAbstraction()
 
@@ -61,6 +65,9 @@ object CactusApManager : ApManager {
 
     override fun methodNDInitialToFinalApSummariesStorage(methodInitialStatement: CommonInst): MethodNDInitialToFinalApSummariesStorage =
         MethodNDInitialToFinalCactusApSummariesStorage(methodInitialStatement)
+
+    override fun factSideEffectSummariesApStorage(methodInitialStatement: CommonInst): FactSideEffectSummariesApStorage =
+        FactSESummariesCactusStorage(methodInitialStatement)
 
     override fun mostAbstractInitialAp(base: AccessPathBase): InitialFactAp =
         AccessPathWithCycles(base, access = null, exclusions = Empty)

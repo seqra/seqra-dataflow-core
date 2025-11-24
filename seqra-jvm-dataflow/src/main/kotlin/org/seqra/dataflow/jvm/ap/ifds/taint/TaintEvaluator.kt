@@ -359,14 +359,7 @@ fun Position.resolveAp(baseAp: AccessPathBase): PositionAccess {
             val accessor = when (val a = access) {
                 PositionAccessor.ElementAccessor -> ElementAccessor
                 is PositionAccessor.FieldAccessor -> FieldAccessor(a.className, a.fieldName, a.fieldType)
-                PositionAccessor.AnyFieldAccessor -> {
-                    // force loop in access path
-                    val loopedPosition = PositionAccess.Complex(
-                        PositionAccess.Complex(resolvedBaseAp, AnyAccessor),
-                        AnyAccessor
-                    )
-                    return loopedPosition
-                }
+                PositionAccessor.AnyFieldAccessor -> AnyAccessor
             }
 
             PositionAccess.Complex(resolvedBaseAp, accessor)
@@ -411,4 +404,37 @@ private fun PositionAccess.baseIsResult(): Boolean = when (this) {
 fun PositionAccess.withPrefix(prefix: Accessor): PositionAccess = when (this) {
     is PositionAccess.Complex -> PositionAccess.Complex(base.withPrefix(prefix), accessor)
     is PositionAccess.Simple -> PositionAccess.Complex(this, prefix)
+}
+
+fun PositionAccess.withPrefix(prefix: List<Accessor>): PositionAccess = when (this) {
+    is PositionAccess.Complex -> PositionAccess.Complex(base.withPrefix(prefix), accessor)
+    is PositionAccess.Simple -> prefix.fold(this as PositionAccess) { res, ac ->
+        PositionAccess.Complex(res, ac)
+    }
+}
+
+fun PositionAccess.withSuffix(suffix: List<Accessor>): PositionAccess =
+    suffix.fold(this) { res, ac -> PositionAccess.Complex(res, ac) }
+
+fun PositionAccess.removeSuffix(suffix: List<Accessor>): PositionAccess {
+    var result = this
+    for (ac in suffix.asReversed()) {
+        check(result is PositionAccess.Complex && result.accessor == ac) {
+            "Suffix mismatch"
+        }
+        result = result.base
+    }
+    return result
+}
+
+fun PositionAccess.removePrefix(prefix: Accessor): PositionAccess = when (this) {
+    is PositionAccess.Complex -> when (base) {
+        is PositionAccess.Complex -> PositionAccess.Complex(base.removePrefix(prefix), accessor)
+        is PositionAccess.Simple -> {
+            check(accessor == prefix) { "Prefix mismatch" }
+            base
+        }
+    }
+
+    is PositionAccess.Simple -> error("Prefix mismatch")
 }

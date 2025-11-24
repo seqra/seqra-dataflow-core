@@ -1,17 +1,24 @@
 package org.seqra.dataflow.jvm.ap.ifds
 
+import org.seqra.dataflow.ap.ifds.FinalAccessor
+import org.seqra.dataflow.ap.ifds.TaintMarkAccessor
 import org.seqra.dataflow.ap.ifds.access.InitialFactAp
 import org.seqra.dataflow.configuration.jvm.ContainsMark
 import org.seqra.dataflow.configuration.jvm.TaintMark
 import org.seqra.dataflow.jvm.ap.ifds.JIRMarkAwareConditionExpr.Literal
+import org.seqra.dataflow.jvm.ap.ifds.taint.ContainsMarkOnAnyField
 import org.seqra.dataflow.jvm.ap.ifds.taint.FactAwareConditionEvaluator
 import org.seqra.dataflow.jvm.ap.ifds.taint.FactReader
+import org.seqra.dataflow.jvm.ap.ifds.taint.JIRFactWithMarkAfterAnyFieldResolver
 import org.seqra.dataflow.jvm.ap.ifds.taint.PositionAccess
+import org.seqra.dataflow.jvm.ap.ifds.taint.removeSuffix
 import org.seqra.dataflow.jvm.ap.ifds.taint.resolveAp
 import org.seqra.dataflow.jvm.ap.ifds.taint.resolveBaseAp
+import org.seqra.dataflow.jvm.ap.ifds.taint.withSuffix
 
 class JIRFactAwareConditionEvaluator(
     facts: List<FactReader>,
+    private val markAfterAnyFieldResolver: JIRFactWithMarkAfterAnyFieldResolver?
 ) : FactAwareConditionEvaluator {
     private val basedFacts = facts.groupByTo(hashMapOf()) { it.base }
 
@@ -39,7 +46,39 @@ class JIRFactAwareConditionEvaluator(
 
     private fun evalLiteral(literal: Literal): Boolean {
         if (literal.negated) return true
-        return evalContainsMark(literal.condition)
+
+        return when (literal) {
+            is JIRMarkAwareConditionExpr.ContainsMarkLiteral -> evalContainsMark(literal.condition)
+            is JIRMarkAwareConditionExpr.ContainsMarkOnAnyFieldLiteral -> evalContainsMarkOnAnyField(literal.condition)
+        }
+    }
+
+    private fun evalContainsMarkOnAnyField(condition: ContainsMarkOnAnyField): Boolean {
+        val conditionBase = condition.position.resolveBaseAp()
+        val relevantFacts = basedFacts[conditionBase] ?: return false
+
+        val conditionPosAp = condition.position.resolveAp(conditionBase)
+
+        val tmAccessor = TaintMarkAccessor(condition.mark.name)
+
+        val requiredPosition = conditionPosAp.withSuffix(listOf(tmAccessor))
+        for (reader in relevantFacts) {
+            val positionWithTaintMark = reader.containsAnyPosition(requiredPosition) ?: continue
+
+            val finalPositionWithTaintMark = positionWithTaintMark.withSuffix(listOf(FinalAccessor))
+            if (!reader.containsPosition(finalPositionWithTaintMark)) continue
+
+            val tmPosition = positionWithTaintMark.removeSuffix(listOf(tmAccessor))
+
+            hasEvaluatedContainsMark = true
+            evaluatedFacts += EvaluatedFact(reader, tmPosition, condition.mark)
+
+            return true
+        }
+
+        markAfterAnyFieldResolver?.resolve(tmAccessor)
+
+        return false
     }
 
     private val markEvalCache = hashMapOf<ContainsMark, MarkEvaluationResult>()

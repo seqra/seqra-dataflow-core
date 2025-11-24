@@ -1,19 +1,22 @@
 package org.seqra.dataflow.ap.ifds.analysis
 
 import org.seqra.dataflow.ap.ifds.AccessPathBase
+import org.seqra.dataflow.ap.ifds.SideEffectKind
 import org.seqra.dataflow.ap.ifds.access.FinalFactAp
 import org.seqra.dataflow.ap.ifds.access.InitialFactAp
 import org.seqra.dataflow.configuration.CommonTaintAction
 import org.seqra.dataflow.configuration.CommonTaintConfigurationItem
 
 interface MethodCallFlowFunction {
+    sealed interface CallFact
+
     sealed interface Call2ReturnFact
 
-    sealed interface ZeroCallFact
+    sealed interface ZeroCallFact: CallFact
 
-    sealed interface FactCallFact
+    sealed interface FactCallFact: CallFact
 
-    sealed interface NDFactCallFact
+    sealed interface NDFactCallFact: CallFact
 
     data object Unchanged : ZeroCallFact, FactCallFact, NDFactCallFact
 
@@ -59,6 +62,9 @@ interface MethodCallFlowFunction {
     ) : NDFactCallFact
 
     data class SideEffectRequirement(val initialFactAp: InitialFactAp) : FactCallFact
+
+    data class ZeroSideEffect(val kind: SideEffectKind) : ZeroCallFact
+    data class FactSideEffect(val initialFactAp: InitialFactAp, val kind: SideEffectKind) : FactCallFact
 
     data class Drop(
         val traceInfo: TraceInfo?,

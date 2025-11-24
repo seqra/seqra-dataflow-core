@@ -1,11 +1,11 @@
 package org.seqra.dataflow.ap.ifds.access.tree
 
-import org.seqra.ir.api.common.cfg.CommonInst
 import org.seqra.dataflow.ap.ifds.AccessPathBase
 import org.seqra.dataflow.ap.ifds.ExclusionSet
 import org.seqra.dataflow.ap.ifds.ExclusionSet.Empty
 import org.seqra.dataflow.ap.ifds.FinalAccessor
 import org.seqra.dataflow.ap.ifds.LanguageManager
+import org.seqra.dataflow.ap.ifds.access.AnyAccessorUnrollStrategy
 import org.seqra.dataflow.ap.ifds.access.ApManager
 import org.seqra.dataflow.ap.ifds.access.FinalFactAp
 import org.seqra.dataflow.ap.ifds.access.InitialFactAbstraction
@@ -18,65 +18,72 @@ import org.seqra.dataflow.ap.ifds.access.MethodFinalApSummariesStorage
 import org.seqra.dataflow.ap.ifds.access.MethodInitialToFinalApSummariesStorage
 import org.seqra.dataflow.ap.ifds.access.MethodNDInitialToFinalApSummariesStorage
 import org.seqra.dataflow.ap.ifds.access.SideEffectRequirementApStorage
+import org.seqra.dataflow.ap.ifds.access.FactSideEffectSummariesApStorage
 import org.seqra.dataflow.ap.ifds.access.tree.AccessTree.AccessNode
 import org.seqra.dataflow.ap.ifds.serialization.ApSerializer
 import org.seqra.dataflow.ap.ifds.serialization.SummarySerializationContext
+import org.seqra.ir.api.common.cfg.CommonInst
 
-object TreeApManager : ApManager {
+class TreeApManager(
+    override val anyAccessorUnrollStrategy: AnyAccessorUnrollStrategy
+) : ApManager {
     override fun initialFactAbstraction(methodInitialStatement: CommonInst): InitialFactAbstraction =
-        TreeInitialFactAbstraction()
+        TreeInitialFactAbstraction(this)
 
     override fun methodEdgesFinalApSet(
         methodInitialStatement: CommonInst,
         maxInstIdx: Int,
         languageManager: LanguageManager
     ): MethodEdgesFinalApSet =
-        MethodEdgesFinalTreeApSet(methodInitialStatement, maxInstIdx, languageManager)
+        MethodEdgesFinalTreeApSet(methodInitialStatement, maxInstIdx, languageManager, this)
 
     override fun methodEdgesInitialToFinalApSet(
         methodInitialStatement: CommonInst,
         maxInstIdx: Int,
         languageManager: LanguageManager
-    ): MethodEdgesInitialToFinalApSet = MethodEdgesInitialToFinalTreeApSet(methodInitialStatement, maxInstIdx, languageManager)
+    ): MethodEdgesInitialToFinalApSet = MethodEdgesInitialToFinalTreeApSet(methodInitialStatement, maxInstIdx, languageManager, this)
 
     override fun methodEdgesNDInitialToFinalApSet(
         methodInitialStatement: CommonInst,
         maxInstIdx: Int,
         languageManager: LanguageManager
     ): MethodEdgesNDInitialToFinalApSet =
-        MethodEdgesNDInitialToFinalTreeApSet(methodInitialStatement, maxInstIdx, languageManager)
+        MethodEdgesNDInitialToFinalTreeApSet(methodInitialStatement, maxInstIdx, languageManager, this)
 
     override fun accessPathSubscription(): MethodAccessPathSubscription =
-        MethodTreeAccessPathSubscription()
+        MethodTreeAccessPathSubscription(this)
 
     override fun sideEffectRequirementApStorage(): SideEffectRequirementApStorage =
-        SideEffectRequirementTreeApStorage()
+        SideEffectRequirementTreeApStorage(this)
 
     override fun methodFinalApSummariesStorage(methodInitialStatement: CommonInst): MethodFinalApSummariesStorage =
-        MethodFinalTreeApSummariesStorage(methodInitialStatement)
+        MethodFinalTreeApSummariesStorage(methodInitialStatement, this)
 
     override fun methodInitialToFinalApSummariesStorage(methodInitialStatement: CommonInst): MethodInitialToFinalApSummariesStorage =
-        MethodInitialToFinalApSummaries(methodInitialStatement)
+        MethodInitialToFinalApSummaries(methodInitialStatement, this)
 
     override fun methodNDInitialToFinalApSummariesStorage(methodInitialStatement: CommonInst): MethodNDInitialToFinalApSummariesStorage =
-        MethodNDInitialToFinalApSummaries(methodInitialStatement)
+        MethodNDInitialToFinalApSummaries(methodInitialStatement, this)
+
+    override fun factSideEffectSummariesApStorage(methodInitialStatement: CommonInst): FactSideEffectSummariesApStorage =
+        FactSideEffectSummariesTreeApStorage(methodInitialStatement, this)
 
     override fun mostAbstractInitialAp(base: AccessPathBase): InitialFactAp =
-        AccessPath(base, access = null, exclusions = Empty)
+        AccessPath(this, base, access = null, exclusions = Empty)
 
     override fun mostAbstractFinalAp(base: AccessPathBase): FinalFactAp =
-        AccessTree(base, AccessNode.abstractNode(), exclusions = Empty)
+        AccessTree(this, base, AccessNode.abstractNode(), exclusions = Empty)
 
     override fun createFinalAp(base: AccessPathBase, exclusions: ExclusionSet): FinalFactAp =
-        AccessTree(base, AccessNode.create(isFinal = true), exclusions)
+        AccessTree(this,base, AccessNode.create(isFinal = true), exclusions)
 
     override fun createAbstractAp(base: AccessPathBase, exclusions: ExclusionSet): FinalFactAp =
-        AccessTree(base, AccessNode.create(isAbstract = true), exclusions)
+        AccessTree(this,base, AccessNode.create(isAbstract = true), exclusions)
 
     override fun createFinalInitialAp(base: AccessPathBase, exclusions: ExclusionSet): InitialFactAp =
-        AccessPath(base, access = null, exclusions).prependAccessor(FinalAccessor)
+        AccessPath(this, base, access = null, exclusions).prependAccessor(FinalAccessor)
 
     override fun createSerializer(context: SummarySerializationContext): ApSerializer {
-        return TreeSerializer(context)
+        return TreeSerializer(this, context)
     }
 }

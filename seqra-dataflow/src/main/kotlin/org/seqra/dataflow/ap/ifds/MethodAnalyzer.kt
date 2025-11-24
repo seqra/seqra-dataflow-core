@@ -6,6 +6,7 @@ import org.seqra.dataflow.ap.ifds.Edge.NDFactToFact
 import org.seqra.dataflow.ap.ifds.Edge.ZeroInitialEdge
 import org.seqra.dataflow.ap.ifds.Edge.ZeroToFact
 import org.seqra.dataflow.ap.ifds.Edge.ZeroToZero
+import org.seqra.dataflow.ap.ifds.MethodAnalyzer.FactToFactSub
 import org.seqra.dataflow.ap.ifds.MethodAnalyzer.MethodCallHandler
 import org.seqra.dataflow.ap.ifds.MethodAnalyzer.MethodCallResolutionFailureHandler
 import org.seqra.dataflow.ap.ifds.MethodSummaryEdgeApplicationUtils.SummaryEdgeApplication
@@ -38,6 +39,8 @@ interface MethodAnalyzer {
 
     fun addInitialFact(factAp: FinalFactAp)
 
+    fun triggerSideEffectRequirement(sideEffectRequirement: InitialFactAp)
+
     val containsUnprocessedEdges: Boolean
 
     fun tabulationAlgorithmStep()
@@ -62,10 +65,24 @@ interface MethodAnalyzer {
         methodSideEffectRequirements: List<InitialFactAp>
     )
 
-    fun handleMethodSideEffectRequirement(
-        currentEdge: NDFactToFact,
-        methodInitialFactBase: AccessPathBase,
-        methodSideEffectRequirements: List<InitialFactAp>
+    fun handleZeroToZeroMethodSideEffectSummary(
+        currentEdge: ZeroToZero,
+        sideEffectSummaries: List<SideEffectSummary.ZeroSideEffectSummary>
+    )
+
+    fun handleZeroToFactMethodSideEffectSummary(
+        summarySubs: List<ZeroToFactSub>,
+        sideEffectSummaries: List<SideEffectSummary.FactSideEffectSummary>
+    )
+
+    fun handleFactToFactMethodSideEffectSummary(
+        summarySubs: List<FactToFactSub>,
+        sideEffectSummaries: List<SideEffectSummary.FactSideEffectSummary>
+    )
+
+    fun handleNDFactToFactMethodSideEffectSummary(
+        summarySubs: List<NDFactToFactSub>,
+        sideEffectSummaries: List<SideEffectSummary.FactSideEffectSummary>
     )
 
     val analyzerSteps: Long
@@ -154,6 +171,7 @@ class NormalMethodAnalyzer(
     private val edges = MethodAnalyzerEdges(apManager, methodEntryPoint, analysisManager)
     private var pendingSummaryEdges = arrayListOf<Edge>()
     private var pendingSideEffectRequirements = arrayListOf<InitialFactAp>()
+    private var pendingSideEffectSummaries = arrayListOf<SideEffectSummary>()
 
     private val analysisContext = analysisManager.getMethodAnalysisContext(methodEntryPoint, runner.graph)
 
@@ -232,6 +250,11 @@ class NormalMethodAnalyzer(
         }
     }
 
+    override fun triggerSideEffectRequirement(sideEffectRequirement: InitialFactAp) {
+        val curFact = sideEffectRequirement.replaceExclusions(ExclusionSet.Empty)
+        addSideEffectRequirement(curFact, sideEffectRequirement)
+    }
+
     override fun tabulationAlgorithmStep() {
         analyzerSteps++
 
@@ -271,6 +294,7 @@ class NormalMethodAnalyzer(
 
         flushPendingSummaryEdges()
         flushPendingSideEffectRequirements()
+        flushPendingSideEffectSummaries()
     }
 
     private fun simpleStatementStep(edge: Edge) {
@@ -302,6 +326,14 @@ class NormalMethodAnalyzer(
             is Sequent.SideEffectRequirement -> {
                 check(edge is FactToFact) { "Initial fact required for side effect" }
                 addSideEffectRequirement(edge, sf.initialFactAp)
+                return
+            }
+            is Sequent.ZeroSideEffect -> {
+                addZeroSideEffect(sf.kind)
+                return
+            }
+            is Sequent.FactSideEffect -> {
+                addFactSideEffect(edge, sf.initialFactAp, sf.kind)
                 return
             }
         }
@@ -391,6 +423,10 @@ class NormalMethodAnalyzer(
                 )
                 handleStatementEdge(edge, edgeAfterStatement)
             }
+
+            is MethodCallFlowFunction.ZeroSideEffect -> {
+                addZeroSideEffect(fact.kind)
+            }
         }
     }
 
@@ -430,6 +466,10 @@ class NormalMethodAnalyzer(
 
             is MethodCallFlowFunction.SideEffectRequirement -> {
                 addSideEffectRequirement(edge, fact.initialFactAp)
+            }
+
+            is MethodCallFlowFunction.FactSideEffect -> {
+                addFactSideEffect(edge, fact.initialFactAp, fact.kind)
             }
 
             is MethodCallFlowFunction.CallToReturnNonDistributiveFact -> {
@@ -582,6 +622,13 @@ class NormalMethodAnalyzer(
         }
     }
 
+    private fun flushPendingSideEffectSummaries() {
+        if (pendingSideEffectSummaries.isNotEmpty()) {
+            runner.addNewSideEffectSummaries(methodEntryPoint, pendingSideEffectSummaries)
+            pendingSideEffectSummaries = arrayListOf()
+        }
+    }
+
     private fun resolveMethodCall(
         callExpr: CommonCallExpr, statement: CommonInst,
         handler: MethodCallHandler, failureHandler: MethodCallResolutionFailureHandler
@@ -678,21 +725,106 @@ class NormalMethodAnalyzer(
         }
     }
 
-    override fun handleMethodSideEffectRequirement(
-        currentEdge: NDFactToFact,
-        methodInitialFactBase: AccessPathBase,
-        methodSideEffectRequirements: List<InitialFactAp>,
+    override fun handleZeroToZeroMethodSideEffectSummary(
+        currentEdge: ZeroToZero,
+        sideEffectSummaries: List<SideEffectSummary.ZeroSideEffectSummary>
     ) {
-        TODO("ND-side effect requirement is not supported")
+        val handler = analysisManager.getMethodSideEffectSummaryHandler(
+            apManager, analysisContext,
+            currentEdge.statement,
+            runner
+        )
+
+        handler.handleZeroToZero(sideEffectSummaries).forEach {
+            handleSequentFact(currentEdge, it)
+        }
+    }
+
+    override fun handleZeroToFactMethodSideEffectSummary(
+        summarySubs: List<MethodAnalyzer.ZeroToFactSub>,
+        sideEffectSummaries: List<SideEffectSummary.FactSideEffectSummary>
+    ) {
+        for (sub in summarySubs) {
+            val handler = analysisManager.getMethodSideEffectSummaryHandler(
+                apManager, analysisContext,
+                sub.currentEdge.statement,
+                runner
+            )
+
+            applyMethodSideEffectSummaries(
+                currentEdge = sub.currentEdge,
+                currentEdgeFactAp = sub.currentEdge.factAp,
+                methodInitialFactBase = sub.methodInitialFactBase,
+                sideEffectSummaries = sideEffectSummaries,
+                handleSideEffect = handler::handleZeroToFact
+            )
+        }
+    }
+
+    override fun handleFactToFactMethodSideEffectSummary(
+        summarySubs: List<FactToFactSub>,
+        sideEffectSummaries: List<SideEffectSummary.FactSideEffectSummary>
+    ) {
+        for (sub in summarySubs) {
+            val handler = analysisManager.getMethodSideEffectSummaryHandler(
+                apManager, analysisContext,
+                sub.currentEdge.statement,
+                runner,
+            )
+
+            applyMethodSideEffectSummaries(
+                currentEdge = sub.currentEdge,
+                currentEdgeFactAp = sub.currentEdge.factAp,
+                methodInitialFactBase = sub.methodInitialFactBase,
+                sideEffectSummaries = sideEffectSummaries,
+            ) { currentFactAp, summaryEffect, kind ->
+                handler.handleFactToFact(sub.currentEdge.initialFactAp, currentFactAp, summaryEffect, kind)
+            }
+        }
+    }
+
+    override fun handleNDFactToFactMethodSideEffectSummary(
+        summarySubs: List<MethodAnalyzer.NDFactToFactSub>,
+        sideEffectSummaries: List<SideEffectSummary.FactSideEffectSummary>
+    ) {
+        TODO("ND-side effects are not supported")
     }
 
     private fun addSideEffectRequirement(currentEdge: FactToFact, sideEffectRequirement: InitialFactAp) {
-        handleInputFactChange(currentEdge.initialFactAp, sideEffectRequirement)
+        addSideEffectRequirement(currentEdge.initialFactAp, sideEffectRequirement)
+    }
+
+    private fun addSideEffectRequirement(curInitialFactAp: InitialFactAp, sideEffectRequirement: InitialFactAp) {
+        handleInputFactChange(curInitialFactAp, sideEffectRequirement)
 
         pendingSideEffectRequirements.add(sideEffectRequirement)
 
         if (!analyzerEnqueued) {
             flushPendingSideEffectRequirements()
+        }
+    }
+
+    private fun addFactSideEffect(
+        currentEdge: Edge,
+        initialFactAp: InitialFactAp,
+        kind: SideEffectKind,
+    ) {
+        if (currentEdge is FactToFact) {
+            handleInputFactChange(currentEdge.initialFactAp, initialFactAp)
+        }
+
+        addSideEffectSummary(SideEffectSummary.FactSideEffectSummary(initialFactAp, kind))
+    }
+
+    private fun addZeroSideEffect(kind: SideEffectKind) {
+        addSideEffectSummary(SideEffectSummary.ZeroSideEffectSummary(kind))
+    }
+
+    private fun addSideEffectSummary(summary: SideEffectSummary) {
+        pendingSideEffectSummaries.add(summary)
+
+        if (!analyzerEnqueued) {
+            flushPendingSideEffectSummaries()
         }
     }
 
@@ -752,7 +884,7 @@ class NormalMethodAnalyzer(
     }
 
     override fun handleFactToFactMethodSummaryEdge(
-        summarySubs: List<MethodAnalyzer.FactToFactSub>,
+        summarySubs: List<FactToFactSub>,
         methodSummaries: List<FactToFact>
     ) {
         summaryEdgesHandled++
@@ -777,7 +909,7 @@ class NormalMethodAnalyzer(
     }
 
     override fun handleFactToFactMethodNDSummaryEdge(
-        summarySubs: List<MethodAnalyzer.FactToFactSub>,
+        summarySubs: List<FactToFactSub>,
         methodSummaries: List<NDFactToFact>,
     ) {
         handleMethodNDSummariesSub(
@@ -828,9 +960,46 @@ class NormalMethodAnalyzer(
         methodSummaries: List<FactToFact>,
         handleSummaryEdge: (currentFactAp: FinalFactAp, summaryEffect: SummaryEdgeApplication, summaryFact: FinalFactAp) -> Set<Sequent>
     ) {
+        applyMethodAnySummaries(
+            currentEdge,
+            currentEdgeFactAp,
+            methodInitialFactBase,
+            methodSummaries,
+            { it.initialFactAp }
+        ) { currentFactAp, summaryEdgeEffect, methodSummary ->
+            handleSummaryEdge(currentFactAp, summaryEdgeEffect, methodSummary.factAp)
+        }
+    }
+
+    private fun applyMethodSideEffectSummaries(
+        currentEdge: Edge,
+        currentEdgeFactAp: FinalFactAp,
+        methodInitialFactBase: AccessPathBase,
+        sideEffectSummaries: List<SideEffectSummary.FactSideEffectSummary>,
+        handleSideEffect: (currentFactAp: FinalFactAp, summaryEffect: SummaryEdgeApplication, kind: SideEffectKind) -> Set<Sequent>
+    ) {
+        applyMethodAnySummaries(
+            currentEdge,
+            currentEdgeFactAp,
+            methodInitialFactBase,
+            sideEffectSummaries,
+            { it.initialFactAp }
+        ) { currentFactAp, summaryEdgeEffect, methodSummary ->
+            handleSideEffect(currentFactAp, summaryEdgeEffect, methodSummary.kind)
+        }
+    }
+
+    private inline fun <S> applyMethodAnySummaries(
+        currentEdge: Edge,
+        currentEdgeFactAp: FinalFactAp,
+        methodInitialFactBase: AccessPathBase,
+        methodSummaries: List<S>,
+        getSummaryInitialFact: (S) -> InitialFactAp,
+        handleSummary: (currentFactAp: FinalFactAp, summaryEffect: SummaryEdgeApplication, S) -> Set<Sequent>
+    ) {
         val methodInitialFact = currentEdgeFactAp.rebase(methodInitialFactBase)
 
-        val summaries = methodSummaries.groupByTo(hashMapOf()) { it.initialFactAp }
+        val summaries = methodSummaries.groupByTo(hashMapOf()) { getSummaryInitialFact(it) }
         for ((summaryInitialFact, summaryEdges) in summaries) {
             val summaryEdgeEffects = MethodSummaryEdgeApplicationUtils.tryApplySummaryEdge(
                 methodInitialFact, summaryInitialFact
@@ -838,7 +1007,7 @@ class NormalMethodAnalyzer(
 
             for (summaryEdgeEffect in summaryEdgeEffects) {
                 for (methodSummary in summaryEdges) {
-                    val sf = handleSummaryEdge(currentEdgeFactAp, summaryEdgeEffect, methodSummary.factAp)
+                    val sf = handleSummary(currentEdgeFactAp, summaryEdgeEffect, methodSummary)
                     handleSequentFact(currentEdge, sf)
                 }
             }
@@ -1081,6 +1250,10 @@ class EmptyMethodAnalyzer(
         addSummary(factAp.base)
     }
 
+    override fun triggerSideEffectRequirement(sideEffectRequirement: InitialFactAp) {
+        // do nothing
+    }
+
     private fun addSummary(base: AccessPathBase) {
         if (!taintedInitialFacts.add(base)) return
 
@@ -1107,7 +1280,7 @@ class EmptyMethodAnalyzer(
     }
 
     override fun handleFactToFactMethodSummaryEdge(
-        summarySubs: List<MethodAnalyzer.FactToFactSub>,
+        summarySubs: List<FactToFactSub>,
         methodSummaries: List<FactToFact>
     ) {
         error("Empty method should not receive summary edges")
@@ -1142,7 +1315,7 @@ class EmptyMethodAnalyzer(
     }
 
     override fun handleFactToFactMethodNDSummaryEdge(
-        summarySubs: List<MethodAnalyzer.FactToFactSub>,
+        summarySubs: List<FactToFactSub>,
         methodSummaries: List<NDFactToFact>,
     ) {
         error("Empty method should not receive summary edges")
@@ -1163,12 +1336,32 @@ class EmptyMethodAnalyzer(
         error("Empty method should not receive side effect requirements")
     }
 
-    override fun handleMethodSideEffectRequirement(
-        currentEdge: NDFactToFact,
-        methodInitialFactBase: AccessPathBase,
-        methodSideEffectRequirements: List<InitialFactAp>,
+    override fun handleZeroToZeroMethodSideEffectSummary(
+        currentEdge: ZeroToZero,
+        sideEffectSummaries: List<SideEffectSummary.ZeroSideEffectSummary>
     ) {
-        error("Empty method should not receive side effect requirements")
+        error("Empty method should not receive side effects")
+    }
+
+    override fun handleZeroToFactMethodSideEffectSummary(
+        summarySubs: List<MethodAnalyzer.ZeroToFactSub>,
+        sideEffectSummaries: List<SideEffectSummary.FactSideEffectSummary>
+    ) {
+        error("Empty method should not receive side effects")
+    }
+
+    override fun handleFactToFactMethodSideEffectSummary(
+        summarySubs: List<FactToFactSub>,
+        sideEffectSummaries: List<SideEffectSummary.FactSideEffectSummary>
+    ) {
+        error("Empty method should not receive side effects")
+    }
+
+    override fun handleNDFactToFactMethodSideEffectSummary(
+        summarySubs: List<MethodAnalyzer.NDFactToFactSub>,
+        sideEffectSummaries: List<SideEffectSummary.FactSideEffectSummary>
+    ) {
+        error("Empty method should not receive side effects")
     }
 
     override fun handleResolvedMethodCall(method: MethodWithContext, handler: MethodCallHandler) {

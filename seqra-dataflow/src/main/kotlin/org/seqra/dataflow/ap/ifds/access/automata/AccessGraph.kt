@@ -8,10 +8,10 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet
 import it.unimi.dsi.fastutil.objects.ObjectIterator
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet
 import org.seqra.dataflow.ap.ifds.Accessor
-import org.seqra.dataflow.ap.ifds.AnyAccessor
 import org.seqra.dataflow.ap.ifds.ExclusionSet
 import org.seqra.dataflow.ap.ifds.FactTypeChecker
 import org.seqra.dataflow.ap.ifds.serialization.SummarySerializationContext
+import org.seqra.dataflow.ap.ifds.tryAnyAccessorOrNull
 import org.seqra.dataflow.util.PersistentArrayBuilder
 import org.seqra.dataflow.util.PersistentBitSet
 import org.seqra.dataflow.util.PersistentBitSet.Companion.emptyPersistentBitSet
@@ -84,11 +84,17 @@ class AccessGraph(
     private val hash: Int by lazy(LazyThreadSafetyMode.PUBLICATION) { dfsHash() }
 
     fun getAllOwnAccessors() =
-        edges.keys.mapTo(hashSetOf()) {
-            with (manager) {
-                it.accessor
-            }
+        edges.keys.mapNotNullTo(hashSetOf()) {
+            if (it == manager.anyAccessorIdx) return@mapNotNullTo null
+            with (manager) { it.accessor }
         }
+
+    fun getInitialSuccessorsAccessors() = buildSet {
+        stateSuccessors(initial).forEach { accessorIdx ->
+            if (accessorIdx == manager.anyAccessorIdx) return@forEach
+            with(manager) { add(accessorIdx.accessor) }
+        }
+    }
 
     private fun dfsHash(): Int {
         var hash = 0
@@ -264,7 +270,12 @@ class AccessGraph(
 
     fun prepend(accessor: AccessorIdx): AccessGraph {
         val mutableCopy = mutable()
-        val mutableResult = mutableCopy.prepend(accessor)
+        var mutableResult = mutableCopy.prepend(accessor)
+
+        if (accessor == manager.anyAccessorIdx) {
+            // force loop in graph
+            mutableResult = mutableResult.prepend(accessor)
+        }
 
         if (mutableResult === mutableCopy) return this
 
@@ -366,9 +377,9 @@ class AccessGraph(
                     if (anySuccessor == NO_NODE) return NO_NODE
 
                     val accessorObj = with(manager) { accessor.accessor }
-                    if (!AnyAccessor.containsAccessor(accessorObj)) return NO_NODE
-
-                    thisSuccessor = anySuccessor
+                    manager.tryAnyAccessorOrNull(accessorObj) {
+                        thisSuccessor = anySuccessor
+                    } ?: return NO_NODE
                 }
 
                 val otherSuccessor = other.getStateSuccessor(otherNode, accessor)

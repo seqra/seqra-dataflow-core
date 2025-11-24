@@ -21,4 +21,5 @@ dependencies {
     implementation(KotlinDependency.Libs.kotlinx_collections)
 
     implementation(Libs.fastutil)
+    implementation(Libs.jdot)
 }

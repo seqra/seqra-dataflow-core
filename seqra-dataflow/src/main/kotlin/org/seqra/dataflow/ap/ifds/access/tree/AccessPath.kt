@@ -13,18 +13,19 @@ import org.seqra.dataflow.ap.ifds.access.InitialFactAp
 import org.seqra.dataflow.ap.ifds.access.tree.AccessTree.AccessNode.Companion.SUBSEQUENT_ARRAY_ELEMENTS_LIMIT
 
 class AccessPath(
+    private val apManager: TreeApManager,
     override val base: AccessPathBase,
     val access: AccessNode?,
     override val exclusions: ExclusionSet
 ): InitialFactAp {
     override fun rebase(newBase: AccessPathBase): InitialFactAp =
-        AccessPath(newBase, access, exclusions)
+        AccessPath(apManager, newBase, access, exclusions)
 
     override fun exclude(accessor: Accessor): InitialFactAp =
-        AccessPath(base, access, exclusions.add(accessor))
+        AccessPath(apManager, base, access, exclusions.add(accessor))
 
     override fun replaceExclusions(exclusions: ExclusionSet): InitialFactAp =
-        AccessPath(base, access, exclusions)
+        AccessPath(apManager, base, access, exclusions)
 
     override fun getAllAccessors(): Set<Accessor> {
         val result = hashSetOf<Accessor>()
@@ -41,19 +42,22 @@ class AccessPath(
         return access.accessor == accessor
     }
 
+    override fun getStartAccessors(): Set<Accessor> =
+        access?.let { setOf(it.accessor) } ?: emptySet()
+
     override fun readAccessor(accessor: Accessor): AccessPath? {
         if (access == null) return null
         if (access.accessor != accessor) return null
-        return AccessPath(base, access.next, exclusions)
+        return AccessPath(apManager, base, access.next, exclusions)
     }
 
     override fun prependAccessor(accessor: Accessor): InitialFactAp {
         if (access == null) {
-            return AccessPath(base, AccessNode(accessor, next = null), exclusions)
+            return AccessPath(apManager, base, AccessNode(accessor, next = null), exclusions)
         }
 
         val node = access.addParent(accessor)
-        return AccessPath(base, node, exclusions)
+        return AccessPath(apManager, base, node, exclusions)
     }
 
     override fun clearAccessor(accessor: Accessor): InitialFactAp? {
@@ -65,10 +69,21 @@ class AccessPath(
     sealed interface AccessPathDelta : InitialFactAp.Delta {
         data object Empty : AccessPathDelta {
             override val isEmpty: Boolean get() = true
+            override fun startsWithAccessor(accessor: Accessor): Boolean = false
+            override fun getStartAccessors(): Set<Accessor> = emptySet()
+            override fun getAllAccessors(): Set<Accessor> = emptySet()
+            override fun readAccessor(accessor: Accessor): InitialFactAp.Delta? = null
         }
 
         data class Delta(val node: AccessNode) : AccessPathDelta {
             override val isEmpty: Boolean get() = false
+            override fun startsWithAccessor(accessor: Accessor): Boolean = node.accessor == accessor
+            override fun getStartAccessors(): Set<Accessor> = setOf(node.accessor)
+            override fun getAllAccessors(): Set<Accessor> = node.mapTo(hashSetOf()) { it }
+            override fun readAccessor(accessor: Accessor): InitialFactAp.Delta? {
+                if (node.accessor == accessor) return node.next?.let { Delta(it) }
+                return null
+            }
         }
 
         override fun concat(other: InitialFactAp.Delta): InitialFactAp.Delta {
@@ -108,7 +123,7 @@ class AccessPath(
 
                 null
             } else {
-                otherNode.getChild(node.accessor)
+                otherNode.getChild(apManager, node.accessor)
             }
 
             if (nextOtherNode == null) {
@@ -118,7 +133,7 @@ class AccessPath(
                     val matchedAccessNode = accessorsOnPath.foldRight(null as AccessNode?) { accessor, prevNode ->
                         AccessNode(accessor, prevNode)
                     }
-                    val matchedFact = AccessPath(base, matchedAccessNode, exclusions)
+                    val matchedFact = AccessPath(apManager, base, matchedAccessNode, exclusions)
 
                     return listOf(matchedFact to AccessPathDelta.Delta(filteredNode))
                 }
@@ -145,7 +160,7 @@ class AccessPath(
             AccessPathDelta.Empty -> return this
             is AccessPathDelta.Delta -> {
                 val node = access?.concat(delta.node) ?: delta.node
-                return AccessPath(base, node, exclusions)
+                return AccessPath(apManager, base, node, exclusions)
             }
         }
     }
