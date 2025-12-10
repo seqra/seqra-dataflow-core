@@ -14,6 +14,7 @@ import org.seqra.dataflow.configuration.jvm.ConstantTrue
 import org.seqra.dataflow.configuration.jvm.ConstantValue
 import org.seqra.dataflow.configuration.jvm.ContainsMark
 import org.seqra.dataflow.configuration.jvm.IsConstant
+import org.seqra.dataflow.configuration.jvm.IsNull
 import org.seqra.dataflow.configuration.jvm.Not
 import org.seqra.dataflow.configuration.jvm.Or
 import org.seqra.dataflow.configuration.jvm.PositionResolver
@@ -25,6 +26,7 @@ import org.seqra.ir.api.jvm.JIRRefType
 import org.seqra.ir.api.jvm.cfg.JIRBool
 import org.seqra.ir.api.jvm.cfg.JIRConstant
 import org.seqra.ir.api.jvm.cfg.JIRInt
+import org.seqra.ir.api.jvm.cfg.JIRNullConstant
 import org.seqra.ir.api.jvm.cfg.JIRStringConstant
 import org.seqra.ir.api.jvm.cfg.JIRValue
 import org.seqra.ir.api.jvm.ext.isAssignable
@@ -51,6 +53,13 @@ class JIRBasicAtomEvaluator(
     override fun visit(condition: IsConstant): Boolean {
         positionResolver.resolve(condition.position).onSome {
             return isConstant(it)
+        }
+        return false
+    }
+
+    override fun visit(condition: IsNull): Boolean {
+        positionResolver.resolve(condition.position).onSome {
+            return isNull(it)
         }
         return false
     }
@@ -101,6 +110,10 @@ class JIRBasicAtomEvaluator(
 
     private fun isConstant(value: JIRValue): Boolean {
         return value is JIRConstant
+    }
+
+    private fun isNull(value: JIRValue): Boolean {
+        return value is JIRNullConstant
     }
 
     private fun eqConstant(value: JIRValue, constant: ConstantValue): Boolean {
