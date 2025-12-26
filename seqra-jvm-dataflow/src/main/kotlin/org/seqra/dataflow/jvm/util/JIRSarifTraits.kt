@@ -38,14 +38,23 @@ class JIRSarifTraits(
     private fun loadLocalNames(md: JIRMethod) {
         if (methodCache.contains(md)) return
         val mdLocals = hashMapOf<Int, String>()
+        methodCache[md] = mdLocals
         md.flowGraph().instructions.forEach { insn ->
             getAssign(insn)?.let { assign ->
                 getLocals(assign.lhv).filterNot { isRegister(it.name) }.forEach { localInfo ->
                     mdLocals[localInfo.idx] = localInfo.name
                 }
+                val local = assign.lhv
+                if (local is JIRLocalVar && assign.rhv is JIRValue) {
+                    if (!mdLocals.containsKey(local.index)) {
+                        val value = tryGetReadableValue(assign as JIRInst, assign.rhv)
+                        if (value is ReadableValue.Value) {
+                            mdLocals[local.index] = value.toString()
+                        }
+                    }
+                }
             }
         }
-        methodCache[md] = mdLocals
     }
 
     override fun getLocalName(md: JIRMethod, index: Int): String? {
@@ -129,11 +138,20 @@ class JIRSarifTraits(
     private fun tryGetReadableValue(statement: JIRInst, expr: CommonExpr): ReadableValue? {
         if (expr !is JIRValue) return null
         return when (expr) {
-            is JIRFieldRef -> ReadableValue.Value("\"${expr.instance ?: expr.field.enclosingType.jIRClass.simpleName}.${expr.field.name}\"")
+            is JIRFieldRef -> {
+                val instance = expr.instance?.let {
+                    val readableInstance = tryGetReadableValue(statement, it)
+                    if (readableInstance is ReadableValue.Value)
+                        readableInstance.toString()
+                    else
+                        "<?>"
+                } ?: expr.field.enclosingType.jIRClass.simpleName
+                ReadableValue.Value("$instance.${expr.field.name}")
+            }
             is JIRArgument -> {
                 val name = expr.name
                 if (!isDefaultArgName(name))
-                    return ReadableValue.Value("\"$name\"")
+                    return ReadableValue.Value(name)
                 else
                     ReadableValue.Value(printArgument(statement.location.method, expr.index))
             }
@@ -142,29 +160,25 @@ class JIRSarifTraits(
                 val elemName = tryGetReadableValue(statement, expr.index)
                 if (arrName is ReadableValue.Value)
                     if (elemName is ReadableValue.Value)
-                        ReadableValue.Value("\"$arrName[$elemName]\"")
+                        ReadableValue.Value("$arrName[$elemName]")
                     else
-                        ReadableValue.Value("an element of \"$arrName\"")
+                        ReadableValue.Value("$arrName[<?>]")
                 else
                     ReadableValue.UnparsedArrayAccess
             }
             is JIRLocalVar -> {
                 if (!isRegister(expr.name))
-                    ReadableValue.Value("\"${expr.name}\"")
+                    ReadableValue.Value(expr.name)
                 else {
                     val name = getLocalName(statement.enclosingMethod, expr.index)
                     if (name == null || isRegister(name))
                         ReadableValue.UnparsedLocalVar
                     else
-                        ReadableValue.Value("\"name\"")
+                        ReadableValue.Value(name)
                 }
             }
             is JIRThis -> {
-                val printed = printThis(statement) {
-                    // do not parse statement again
-                    null
-                }
-                ReadableValue.Value(printed)
+                ReadableValue.Value("this")
             }
             else -> ReadableValue.Value(expr.toString())
         }
@@ -173,7 +187,7 @@ class JIRSarifTraits(
     override fun getReadableValue(statement: JIRInst, expr: CommonExpr): String? {
         val value = tryGetReadableValue(statement, expr) ?: return null
         return when (value) {
-            is ReadableValue.Value -> value.string
+            is ReadableValue.Value -> "\"${value.string}\""
             is ReadableValue.UnparsedLocalVar -> "a local variable"
             is ReadableValue.UnparsedArrayAccess -> "an element of array"
         }

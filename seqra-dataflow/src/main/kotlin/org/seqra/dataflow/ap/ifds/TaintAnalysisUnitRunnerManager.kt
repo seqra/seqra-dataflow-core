@@ -201,6 +201,32 @@ class TaintAnalysisUnitRunnerManager(
         ) {
             override fun createUnprocessed(item: TaintVulnerability) =
                 VulnerabilityWithTrace(item, trace = null)
+
+            private var prevStats: MethodStats? = null
+
+            override fun reportStats() {
+                logger.info { reportMemoryUsage() }
+
+                logger.debug {
+                    val methodStats = collectMethodStats()
+                    val mostTRMethods = methodStats.stats.values.sortedByDescending { it.traceResolverSteps }
+
+                    val delta = prevStats?.let { methodStats.subtract(it) }
+                    val mostTrDelta = delta?.let { d -> d.stats.values.sortedByDescending { it.traceResolverSteps } }
+
+                    prevStats = methodStats
+
+                    buildString {
+                        appendLine("Steps")
+                        mostTRMethods.take(5).forEach { appendLine(it) }
+
+                        if (mostTrDelta != null) {
+                            appendLine("Delta")
+                            mostTrDelta.take(5).forEach { appendLine(it) }
+                        }
+                    }
+                }
+            }
         }
 
         return traceResolutionContext.processAll(
@@ -379,15 +405,17 @@ class TaintAnalysisUnitRunnerManager(
 
     fun allUnits(): Set<UnitType> = runnerForUnit.keys
 
+    private fun reportMemoryUsage(): String {
+        val maxMemory = Runtime.getRuntime().maxMemory()
+        val usedMemory = maxMemory - Runtime.getRuntime().freeMemory()
+        return "Memory usage: ${usedMemory}/${maxMemory} (${percentToString(usedMemory, maxMemory)})"
+    }
+
     private fun reportRunnerProgress() {
         val stats = runnerForUnit.mapValues { it.value.stats() }
 
         logger.info { "Progress: ${totalEventsProcessed.get()}/${totalEventsEnqueued.get()}" }
-        logger.info {
-            val maxMemory = Runtime.getRuntime().maxMemory()
-            val usedMemory = maxMemory - Runtime.getRuntime().freeMemory()
-            "Memory usage: ${usedMemory}/${maxMemory} (${percentToString(usedMemory, maxMemory)})"
-        }
+        logger.info { reportMemoryUsage() }
 
         analysisManager.reportLanguageSpecificRunnerProgress(logger)
 

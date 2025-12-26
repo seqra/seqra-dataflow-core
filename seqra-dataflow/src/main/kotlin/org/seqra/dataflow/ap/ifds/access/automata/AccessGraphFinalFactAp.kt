@@ -3,16 +3,11 @@ package org.seqra.dataflow.ap.ifds.access.automata
 import org.seqra.dataflow.ap.ifds.AccessPathBase
 import org.seqra.dataflow.ap.ifds.Accessor
 import org.seqra.dataflow.ap.ifds.AnyAccessor
-import org.seqra.dataflow.ap.ifds.ElementAccessor
 import org.seqra.dataflow.ap.ifds.ExclusionSet
 import org.seqra.dataflow.ap.ifds.FactTypeChecker
-import org.seqra.dataflow.ap.ifds.FieldAccessor
-import org.seqra.dataflow.ap.ifds.FinalAccessor
-import org.seqra.dataflow.ap.ifds.TaintMarkAccessor
 import org.seqra.dataflow.ap.ifds.access.FinalFactAp
 import org.seqra.dataflow.ap.ifds.access.InitialFactAp
 import org.seqra.dataflow.ap.ifds.tryAnyAccessorOrNull
-import org.seqra.dataflow.util.forEach
 
 data class AccessGraphFinalFactAp(
     override val base: AccessPathBase,
@@ -47,7 +42,6 @@ data class AccessGraphFinalFactAp(
     }
 
     override fun clearAccessor(accessor: Accessor): FinalFactAp? = with(access.manager) {
-        check(accessor !is AnyAccessor)
         return access.clear(accessor.idx)?.let { AccessGraphFinalFactAp(base, it, exclusions) }
     }
 
@@ -93,7 +87,7 @@ data class AccessGraphFinalFactAp(
         if (delta.isEmpty) return this
         delta as Delta
 
-        val filter = access.createFilter(typeChecker)
+        val filter = access.manager.createFilter(access, typeChecker)
         val filteredDelta = delta.access.filter(filter) ?: return null
 
         if (access.isEmpty()) {
@@ -112,77 +106,5 @@ data class AccessGraphFinalFactAp(
 
         if (base != factAp.base) return false
         return access.containsAll(factAp.access)
-    }
-
-    private fun AccessGraph.createFilter(typeChecker: FactTypeChecker): FactTypeChecker.FactApFilter {
-        val finalPredAccessors = nodePredecessors(final)
-        val filters = mutableListOf<FactTypeChecker.FactApFilter>()
-        finalPredAccessors.forEach { accessorIdx ->
-            val accessor = with(access.manager) { accessorIdx.accessor }
-            when (accessor) {
-                FinalAccessor -> filters += FactTypeChecker.AlwaysRejectFilter
-                is AnyAccessor -> {
-                    return FactTypeChecker.AlwaysAcceptFilter
-                }
-                is TaintMarkAccessor -> filters += OnlyFinalAccessorAllowedFilter
-                is FieldAccessor -> filters += typeChecker.accessPathFilter(listOf(accessor))
-                ElementAccessor -> {
-                    val edge = getEdge(accessorIdx) ?: error("No edge for: $accessor")
-                    val predecessorNode = getEdgeFrom(edge)
-                    val predecessorPredAccessors = nodePredecessors(predecessorNode)
-                    if (predecessorPredAccessors.isEmpty) {
-                        filters += typeChecker.accessPathFilter(listOf(accessor))
-                    } else {
-                        predecessorPredAccessors.forEach { preAccessor ->
-                            val preAccessorObj = with(access.manager) { preAccessor.accessor }
-                            typeChecker.accessPathFilter(listOf(preAccessorObj, accessor))
-                        }
-                    }
-                }
-            }
-        }
-
-        return CombinedFilter.combineFilters(filters)
-    }
-
-    private object OnlyFinalAccessorAllowedFilter : FactTypeChecker.FactApFilter {
-        override fun check(accessor: Accessor): FactTypeChecker.FilterResult =
-            if (accessor is FinalAccessor) {
-                FactTypeChecker.FilterResult.Accept
-            } else {
-                FactTypeChecker.FilterResult.Reject
-            }
-    }
-
-    private class CombinedFilter(
-        private val filters: List<FactTypeChecker.FactApFilter>
-    ) : FactTypeChecker.FactApFilter {
-        override fun check(accessor: Accessor): FactTypeChecker.FilterResult {
-            val nextFilters = mutableListOf<FactTypeChecker.FactApFilter>()
-            for (filter in filters) {
-                when (val status = filter.check(accessor)) {
-                    FactTypeChecker.FilterResult.Accept -> return FactTypeChecker.FilterResult.Accept
-                    FactTypeChecker.FilterResult.Reject -> continue
-                    is FactTypeChecker.FilterResult.FilterNext -> {
-                        nextFilters.add(status.filter)
-                    }
-                }
-            }
-
-            if (nextFilters.isEmpty()) {
-                // No accepted and no next
-                return FactTypeChecker.FilterResult.Reject
-            }
-
-            return FactTypeChecker.FilterResult.FilterNext(combineFilters(nextFilters))
-        }
-
-        companion object {
-            fun combineFilters(filters: List<FactTypeChecker.FactApFilter>) = when (filters.size) {
-                0 -> FactTypeChecker.AlwaysAcceptFilter
-                1 -> filters.single()
-                else -> CombinedFilter(filters)
-            }
-        }
     }
 }

@@ -1,13 +1,9 @@
 package org.seqra.dataflow.ap.ifds.analysis
 
 import mu.KLogger
-import org.seqra.ir.api.common.CommonMethod
-import org.seqra.ir.api.common.cfg.CommonCallExpr
-import org.seqra.ir.api.common.cfg.CommonInst
-import org.seqra.ir.api.common.cfg.CommonValue
-import org.seqra.util.analysis.ApplicationGraph
 import org.seqra.dataflow.ap.ifds.AccessPathBase
 import org.seqra.dataflow.ap.ifds.AnalysisRunner
+import org.seqra.dataflow.ap.ifds.FactTypeChecker
 import org.seqra.dataflow.ap.ifds.LanguageManager
 import org.seqra.dataflow.ap.ifds.MethodEntryPoint
 import org.seqra.dataflow.ap.ifds.TaintAnalysisUnitRunner
@@ -17,8 +13,15 @@ import org.seqra.dataflow.ap.ifds.trace.MethodCallPrecondition
 import org.seqra.dataflow.ap.ifds.trace.MethodSequentPrecondition
 import org.seqra.dataflow.ap.ifds.trace.MethodStartPrecondition
 import org.seqra.dataflow.ifds.UnitResolver
+import org.seqra.ir.api.common.CommonMethod
+import org.seqra.ir.api.common.cfg.CommonCallExpr
+import org.seqra.ir.api.common.cfg.CommonInst
+import org.seqra.ir.api.common.cfg.CommonValue
+import org.seqra.util.analysis.ApplicationGraph
 
 interface AnalysisManager: LanguageManager {
+    val factTypeChecker: FactTypeChecker
+
     fun getMethodAnalysisContext(
         methodEntryPoint: MethodEntryPoint,
         graph: ApplicationGraph<CommonMethod, CommonInst>

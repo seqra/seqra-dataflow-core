@@ -188,6 +188,7 @@ class NormalMethodAnalyzer(
     private val stepsForTaintMark: MutableMap<String, Long> = hashMapOf()
 
     private var summaryEdgesHandled: Long = 0
+    private var traceResolverSteps: Long = 0
 
     init {
         loadSummariesFromRunner()
@@ -199,11 +200,11 @@ class NormalMethodAnalyzer(
             runner.addNewSideEffectRequirement(methodEntryPoint, requirements)
             summaryEdges.forEach { edge ->
                 when (edge) {
-                    is FactToFact -> initialFacts.registerNewInitialFact(edge.initialFactAp)
+                    is FactToFact -> initialFacts.registerNewInitialFact(edge.initialFactAp, analysisManager.factTypeChecker)
                     is ZeroToFact -> zeroInitialFactProcessed = true
                     is ZeroToZero -> zeroInitialFactProcessed = true
                     is NDFactToFact -> edge.initialFacts.forEach {
-                        initialFacts.registerNewInitialFact(it)
+                        initialFacts.registerNewInitialFact(it, analysisManager.factTypeChecker)
                     }
                 }
             }
@@ -214,6 +215,7 @@ class NormalMethodAnalyzer(
         stats.stats(methodEntryPoint.method).apply {
             steps += analyzerSteps
             handledSummaries += summaryEdgesHandled
+            traceResolverSteps += this@NormalMethodAnalyzer.traceResolverSteps
             unprocessedEdges += this@NormalMethodAnalyzer.unprocessedEdges.size
             coveredInstructions.or(edges.reachedStatements())
             this@NormalMethodAnalyzer.stepsForTaintMark.forEach { (mark, count) ->
@@ -244,7 +246,7 @@ class NormalMethodAnalyzer(
         val flowFunction = analysisManager.getMethodStartFlowFunction(apManager, analysisContext)
         val startFacts = flowFunction.propagateFact(factAp)
         startFacts.forEach { startFact ->
-            initialFacts.addAbstractedInitialFact(startFact.fact).forEach { (initialFact, finalFact) ->
+            initialFacts.addAbstractedInitialFact(startFact.fact, analysisManager.factTypeChecker).forEach { (initialFact, finalFact) ->
                 addInitialEdge(initialFact, finalFact)
             }
         }
@@ -549,7 +551,7 @@ class NormalMethodAnalyzer(
 
     private fun handleInputFactChange(originalInputFactAp: InitialFactAp, newInputFactAp: InitialFactAp) {
         if (originalInputFactAp == newInputFactAp) return
-        initialFacts.registerNewInitialFact(newInputFactAp).forEach { (initialFact, finalFact) ->
+        initialFacts.registerNewInitialFact(newInputFactAp, analysisManager.factTypeChecker).forEach { (initialFact, finalFact) ->
             addInitialEdge(initialFact, finalFact)
         }
     }
@@ -861,7 +863,7 @@ class NormalMethodAnalyzer(
                 apManager, analysisContext, sub.currentEdge.statement
             )
 
-            val summariesToApply = applicableSummaries.mapNotNull { handler.prepareFactToFactSummary(it) }
+            val summariesToApply = applicableSummaries.flatMap { handler.prepareFactToFactSummary(it) }
 
             applyMethodSummaries(
                 currentEdge = sub.currentEdge,
@@ -1032,7 +1034,7 @@ class NormalMethodAnalyzer(
                 apManager, analysisContext, currentEdge.statement
             )
 
-            val summariesToApply = applicableSummaries.mapNotNull { handler.prepareNDFactToFactSummary(it) }
+            val summariesToApply = applicableSummaries.flatMap { handler.prepareNDFactToFactSummary(it) }
 
             applyMethodNDSummaries(
                 summaryHandler = handler,
@@ -1156,7 +1158,8 @@ class NormalMethodAnalyzer(
                     }
                 }
 
-                handleSequentFact(currentEdge, sf)
+                val applicableSf = sf.filter { it !is Sequent.SideEffectRequirement }
+                handleSequentFact(currentEdge, applicableSf)
             }
         }
     }
@@ -1194,7 +1197,9 @@ class NormalMethodAnalyzer(
         cancellation: ProcessingCancellation
     ): List<MethodTraceResolver.FullTrace> {
         val resolver = MethodTraceResolver(runner, analysisContext, edges, methodInstGraph)
-        return resolver.resolveIntraProceduralFullTrace(summaryTrace, cancellation)
+        val (fullTrace, steps) = resolver.resolveIntraProceduralFullTrace(summaryTrace, cancellation)
+        traceResolverSteps += steps
+        return fullTrace
     }
 
     override fun resolveIntraProceduralForwardFullTrace(

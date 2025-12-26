@@ -5,6 +5,7 @@ import org.seqra.dataflow.ap.ifds.Accessor
 import org.seqra.dataflow.ap.ifds.Edge
 import org.seqra.dataflow.ap.ifds.ExclusionSet
 import org.seqra.dataflow.ap.ifds.FactToFactEdgeBuilder
+import org.seqra.dataflow.ap.ifds.FactTypeChecker
 import org.seqra.dataflow.ap.ifds.LanguageManager
 import org.seqra.dataflow.ap.ifds.NDFactToFactEdgeBuilder
 import org.seqra.dataflow.ap.ifds.SideEffectSummary.FactSideEffectSummary
@@ -55,8 +56,8 @@ interface AnyAccessorUnrollStrategy {
 }
 
 interface InitialFactAbstraction {
-    fun addAbstractedInitialFact(factAp: FinalFactAp): List<Pair<InitialFactAp, FinalFactAp>>
-    fun registerNewInitialFact(factAp: InitialFactAp): List<Pair<InitialFactAp, FinalFactAp>>
+    fun addAbstractedInitialFact(factAp: FinalFactAp, typeChecker: FactTypeChecker): List<Pair<InitialFactAp, FinalFactAp>>
+    fun registerNewInitialFact(factAp: InitialFactAp, typeChecker: FactTypeChecker): List<Pair<InitialFactAp, FinalFactAp>>
 }
 
 interface MethodAccessPathSubscription {
