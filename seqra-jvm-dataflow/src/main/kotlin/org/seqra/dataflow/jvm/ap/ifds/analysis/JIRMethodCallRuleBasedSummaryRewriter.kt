@@ -8,6 +8,7 @@ import org.seqra.dataflow.configuration.jvm.TaintConfigurationItem
 import org.seqra.dataflow.configuration.jvm.TaintMark
 import org.seqra.dataflow.jvm.ap.ifds.CallPositionToJIRValueResolver
 import org.seqra.dataflow.jvm.ap.ifds.JIRMarkAwareConditionRewriter
+import org.seqra.dataflow.jvm.ap.ifds.JIRMethodPositionBaseTypeResolver
 import org.seqra.dataflow.jvm.ap.ifds.TaintConfigUtils.applyCleanerActions
 import org.seqra.dataflow.jvm.ap.ifds.taint.EvaluatedCleanAction
 import org.seqra.dataflow.jvm.ap.ifds.taint.FinalFactReader
@@ -35,7 +36,7 @@ class JIRMethodCallRuleBasedSummaryRewriter(
 
         JIRMarkAwareConditionRewriter(
             CallPositionToJIRValueResolver(callExpr, returnValue),
-            analysisContext.factTypeChecker
+            analysisContext, statement
         )
     }
 
@@ -75,7 +76,8 @@ class JIRMethodCallRuleBasedSummaryRewriter(
     fun rewriteSummaryFact(fact: FinalFactAp): List<Pair<FinalFactAp, FinalFactReader>> {
         val startFactReader = FinalFactReader(fact, apManager)
 
-        val cleanEvaluator = TaintCleanActionEvaluator()
+        val typeResolver = JIRMethodPositionBaseTypeResolver(callExpr.method.method)
+        val cleanEvaluator = TaintCleanActionEvaluator(typeResolver)
 
         val cleanedFact = userRuleDefinedActions.applyCleanerActions(
             evaluator = cleanEvaluator,

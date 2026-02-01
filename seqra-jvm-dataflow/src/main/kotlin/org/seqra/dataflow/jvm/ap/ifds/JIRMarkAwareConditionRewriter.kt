@@ -7,17 +7,20 @@ import org.seqra.dataflow.configuration.jvm.Not
 import org.seqra.dataflow.configuration.jvm.Or
 import org.seqra.dataflow.configuration.jvm.PositionResolver
 import org.seqra.dataflow.jvm.ap.ifds.JIRMarkAwareConditionExpr.Literal
+import org.seqra.dataflow.jvm.ap.ifds.analysis.JIRMethodAnalysisContext
 import org.seqra.dataflow.jvm.ap.ifds.taint.ContainsMarkOnAnyField
 import org.seqra.dataflow.jvm.ap.ifds.taint.JIRBasicAtomEvaluator
+import org.seqra.ir.api.common.cfg.CommonInst
 import org.seqra.ir.api.jvm.cfg.JIRValue
 import org.seqra.util.Maybe
 
 class JIRMarkAwareConditionRewriter(
     positionResolver: PositionResolver<Maybe<JIRValue>>,
-    typeChecker: JIRFactTypeChecker,
+    analysisContext: JIRMethodAnalysisContext,
+    statement: CommonInst,
 ) {
-    private val positiveAtomEvaluator = JIRBasicAtomEvaluator(negated = false, positionResolver, typeChecker)
-    private val negativeAtomEvaluator = JIRBasicAtomEvaluator(negated = true, positionResolver, typeChecker)
+    private val positiveAtomEvaluator = JIRBasicAtomEvaluator(negated = false, positionResolver, analysisContext, statement)
+    private val negativeAtomEvaluator = JIRBasicAtomEvaluator(negated = true, positionResolver, analysisContext, statement)
 
     fun rewrite(condition: Condition): ExprOrConstant =
         rewriteCondition(condition)

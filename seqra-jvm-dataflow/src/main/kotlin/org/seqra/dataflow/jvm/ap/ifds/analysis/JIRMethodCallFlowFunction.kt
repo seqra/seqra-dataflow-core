@@ -66,7 +66,7 @@ class JIRMethodCallFlowFunction(
     override fun propagateZeroToZero() = buildSet {
         val conditionRewriter = JIRMarkAwareConditionRewriter(
             CallPositionToJIRValueResolver(callExpr, returnValue),
-            analysisContext.factTypeChecker
+            analysisContext, statement
         )
 
         applySinkRules(
@@ -197,7 +197,7 @@ class JIRMethodCallFlowFunction(
 
         val conditionRewriter = JIRMarkAwareConditionRewriter(
             CallPositionToJIRValueResolver(callExpr, returnValue),
-            analysisContext.factTypeChecker
+            analysisContext, statement
         )
 
         val factReader = FinalFactReader(factAp, apManager)
@@ -270,7 +270,8 @@ class JIRMethodCallFlowFunction(
 
         val simpleConditionEvaluator = JIRSimpleFactAwareConditionEvaluator(conditionRewriter, conditionEvaluator)
 
-        val cleaner = TaintCleanActionEvaluator()
+        val typeResolver = JIRMethodPositionBaseTypeResolver(method)
+        val cleaner = TaintCleanActionEvaluator(typeResolver)
 
         val factReaderBeforeCleaner = FinalFactReader(callerFact, apManager)
         val cleanerResults = applyCleaner(
