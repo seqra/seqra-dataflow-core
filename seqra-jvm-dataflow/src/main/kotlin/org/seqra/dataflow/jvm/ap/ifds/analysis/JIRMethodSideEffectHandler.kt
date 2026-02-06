@@ -1,6 +1,8 @@
 package org.seqra.dataflow.jvm.ap.ifds.analysis
 
+import org.seqra.dataflow.ap.ifds.Accessor
 import org.seqra.dataflow.ap.ifds.AnalysisRunner
+import org.seqra.dataflow.ap.ifds.AnyAccessor
 import org.seqra.dataflow.ap.ifds.ExclusionSet
 import org.seqra.dataflow.ap.ifds.MethodSummaryEdgeApplicationUtils
 import org.seqra.dataflow.ap.ifds.SideEffectKind
@@ -42,7 +44,20 @@ class JIRMethodSideEffectHandler(
         val allAccessors = delta.getAllAccessors()
         if (mark !in allAccessors) return
 
-        val relevantStartAccessors = delta.getStartAccessors().filter { accessor ->
+        val startAccessors = hashSetOf<Accessor>()
+        for (accessor in delta.getStartAccessors()) {
+            if (accessor !is AnyAccessor) {
+                startAccessors.add(accessor)
+                continue
+            }
+
+            val anySuccessors = delta.readAccessor(accessor)?.getStartAccessors()
+                ?: continue
+
+            anySuccessors.filterTo(startAccessors) { it !is AnyAccessor }
+        }
+
+        val relevantStartAccessors = startAccessors.filter { accessor ->
             accessor == mark || delta.readAccessor(accessor)?.getAllAccessors()?.contains(mark) ?: false
         }
 
