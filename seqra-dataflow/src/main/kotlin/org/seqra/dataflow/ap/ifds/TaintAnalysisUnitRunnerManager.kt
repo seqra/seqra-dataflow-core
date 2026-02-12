@@ -18,6 +18,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import mu.KotlinLogging
 import org.seqra.dataflow.ap.ifds.access.ApManager
 import org.seqra.dataflow.ap.ifds.analysis.MethodAnalysisContext
+import org.seqra.dataflow.ap.ifds.analysis.MethodCallResolver
 import org.seqra.dataflow.ap.ifds.serialization.SummarySerializationContext
 import org.seqra.dataflow.ap.ifds.taint.TaintAnalysisContext
 import org.seqra.dataflow.ap.ifds.taint.TaintAnalysisUnitStorage
@@ -331,9 +332,10 @@ class TaintAnalysisUnitRunnerManager(
     ) : TaintAnalysisManager by analysisManager {
         override fun getMethodAnalysisContext(
             methodEntryPoint: MethodEntryPoint,
-            graph: ApplicationGraph<CommonMethod, CommonInst>
+            graph: ApplicationGraph<CommonMethod, CommonInst>,
+            callResolver: MethodCallResolver
         ): MethodAnalysisContext = analysisManager.getMethodAnalysisContext(
-            methodEntryPoint, graph,
+            methodEntryPoint, graph, callResolver,
             TaintAnalysisContext(taintConfig, sinkTracker)
         )
     }

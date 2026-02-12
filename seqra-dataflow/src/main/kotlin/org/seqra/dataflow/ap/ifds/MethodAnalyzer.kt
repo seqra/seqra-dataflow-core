@@ -17,6 +17,7 @@ import org.seqra.dataflow.ap.ifds.access.InitialFactAp
 import org.seqra.dataflow.ap.ifds.analysis.MethodCallFlowFunction
 import org.seqra.dataflow.ap.ifds.analysis.MethodCallFlowFunction.ZeroCallFact
 import org.seqra.dataflow.ap.ifds.analysis.MethodCallSummaryHandler
+import org.seqra.dataflow.ap.ifds.analysis.MethodCallSummaryHandler.SummaryEdge
 import org.seqra.dataflow.ap.ifds.analysis.MethodSequentFlowFunction.Sequent
 import org.seqra.dataflow.ap.ifds.analysis.MethodStartFlowFunction.StartFact
 import org.seqra.dataflow.ap.ifds.trace.MethodForwardTraceResolver
@@ -173,7 +174,9 @@ class NormalMethodAnalyzer(
     private var pendingSideEffectRequirements = arrayListOf<InitialFactAp>()
     private var pendingSideEffectSummaries = arrayListOf<SideEffectSummary>()
 
-    private val analysisContext = analysisManager.getMethodAnalysisContext(methodEntryPoint, runner.graph)
+    private val analysisContext = analysisManager.getMethodAnalysisContext(
+        methodEntryPoint, runner.graph, runner.methodCallResolver
+    )
 
     private var analyzerEnqueued = false
     private var unprocessedEdges = arrayListOf<Edge>()
@@ -903,8 +906,8 @@ class NormalMethodAnalyzer(
                 currentEdgeFactAp = sub.currentEdge.factAp,
                 methodInitialFactBase = sub.methodInitialFactBase,
                 methodSummaries = applicableSummaries,
-                handleSummaryEdge = { currentFactAp: FinalFactAp, summaryEffect: SummaryEdgeApplication, summaryFact: FinalFactAp ->
-                    handler.handleFactToFact(sub.currentEdge.initialFactAp, currentFactAp, summaryEffect, summaryFact)
+                handleSummaryEdge = { currentFactAp: FinalFactAp, summaryEffect: SummaryEdgeApplication, summaryEdge: SummaryEdge ->
+                    handler.handleFactToFact(sub.currentEdge.initialFactAp, currentFactAp, summaryEffect, summaryEdge)
                 }
             )
         }
@@ -938,8 +941,8 @@ class NormalMethodAnalyzer(
                 currentEdgeFactAp = sub.currentEdge.factAp,
                 methodInitialFactBase = sub.methodInitialFactBase,
                 methodSummaries = applicableSummaries,
-                handleSummaryEdge = { currentFactAp: FinalFactAp, summaryEffect: SummaryEdgeApplication, summaryFact: FinalFactAp ->
-                    handler.handleNDFactToFact(sub.currentEdge.initialFacts, currentFactAp, summaryEffect, summaryFact)
+                handleSummaryEdge = { currentFactAp: FinalFactAp, summaryEffect: SummaryEdgeApplication, summaryEdge: SummaryEdge ->
+                    handler.handleNDFactToFact(sub.currentEdge.initialFacts, currentFactAp, summaryEffect, summaryEdge)
                 }
             )
         }
@@ -960,7 +963,7 @@ class NormalMethodAnalyzer(
         currentEdgeFactAp: FinalFactAp,
         methodInitialFactBase: AccessPathBase,
         methodSummaries: List<FactToFact>,
-        handleSummaryEdge: (currentFactAp: FinalFactAp, summaryEffect: SummaryEdgeApplication, summaryFact: FinalFactAp) -> Set<Sequent>
+        handleSummaryEdge: (currentFactAp: FinalFactAp, summaryEffect: SummaryEdgeApplication, summaryEdge: SummaryEdge) -> Set<Sequent>
     ) {
         applyMethodAnySummaries(
             currentEdge,
@@ -969,7 +972,7 @@ class NormalMethodAnalyzer(
             methodSummaries,
             { it.initialFactAp }
         ) { currentFactAp, summaryEdgeEffect, methodSummary ->
-            handleSummaryEdge(currentFactAp, summaryEdgeEffect, methodSummary.factAp)
+            handleSummaryEdge(currentFactAp, summaryEdgeEffect, methodSummary.summaryEdge())
         }
     }
 
@@ -1100,7 +1103,7 @@ class NormalMethodAnalyzer(
                             summaryHandler.handleZeroToFact(
                                 currentEdgeFactAp,
                                 SummaryExclusionRefinement(ExclusionSet.Universe),
-                                summaryEdge.factAp
+                                summaryEdge.summaryEdge()
                             )
                         }
 
@@ -1110,7 +1113,7 @@ class NormalMethodAnalyzer(
                                 initialFact,
                                 currentEdgeFactAp,
                                 SummaryExclusionRefinement(initialFact.exclusions),
-                                summaryEdge.factAp
+                                summaryEdge.summaryEdge()
                             )
                         }
 
@@ -1119,7 +1122,7 @@ class NormalMethodAnalyzer(
                                 ndSummaryInitial,
                                 currentEdgeFactAp,
                                 SummaryExclusionRefinement(ExclusionSet.Universe),
-                                summaryEdge.factAp
+                                summaryEdge.summaryEdge()
                             )
                         }
                     }
@@ -1133,7 +1136,7 @@ class NormalMethodAnalyzer(
                                     currentEdge.initialFactAp,
                                     currentEdgeFactAp,
                                     SummaryExclusionRefinement(currentEdge.initialFactAp.exclusions),
-                                    summaryEdge.factAp
+                                    summaryEdge.summaryEdge()
                                 )
                             }
 
@@ -1142,7 +1145,7 @@ class NormalMethodAnalyzer(
                                     ndSummaryInitial,
                                     currentEdgeFactAp,
                                     SummaryExclusionRefinement(ExclusionSet.Universe),
-                                    summaryEdge.factAp
+                                    summaryEdge.summaryEdge()
                                 )
                             }
                         }
@@ -1153,7 +1156,7 @@ class NormalMethodAnalyzer(
                             ndSummaryInitial + currentEdge.initialFacts,
                             currentEdgeFactAp,
                             SummaryExclusionRefinement(ExclusionSet.Universe),
-                            summaryEdge.factAp
+                            summaryEdge.summaryEdge()
                         )
                     }
                 }
@@ -1231,6 +1234,9 @@ class NormalMethodAnalyzer(
             }
         }
     }
+
+    private fun FactToFact.summaryEdge() = SummaryEdge.F2F(initialFactAp, factAp)
+    private fun NDFactToFact.summaryEdge() = SummaryEdge.NdF2F(initialFacts, factAp)
 }
 
 class EmptyMethodAnalyzer(

@@ -40,6 +40,7 @@ import org.seqra.dataflow.jvm.ap.ifds.taint.TaintCleanActionEvaluator
 import org.seqra.dataflow.jvm.ap.ifds.taint.TaintPassActionEvaluator
 import org.seqra.dataflow.jvm.ap.ifds.taint.TaintRulesProvider
 import org.seqra.dataflow.jvm.ap.ifds.taint.TaintSourceActionEvaluator
+import org.seqra.dataflow.jvm.ap.ifds.taint.UserDefinedRuleInfo
 import org.seqra.dataflow.jvm.util.callee
 import org.seqra.dataflow.util.cartesianProductMapTo
 import org.seqra.ir.api.jvm.JIRMethod
@@ -73,19 +74,19 @@ class JIRMethodCallFlowFunction(
             conditionRewriter, factReader = null,
             markAfterAnyFieldResolver = null
         ).forEach { (fact, trace) ->
-            fact.forEachFactWithAliases { this += CallToReturnZFact(factAp = it, trace) }
+            fact.forEachSourceFactWithAliases { this += CallToReturnZFact(factAp = it, trace) }
         }
 
         applySourceRules(
             initialFacts = emptySet(), conditionRewriter, factReader = null, exclusion = ExclusionSet.Universe,
             createFinalFact = { fact, trace ->
-                fact.forEachFactWithAliases { this += CallToReturnZFact(factAp = it, trace) }
+                fact.forEachSourceFactWithAliases { this += CallToReturnZFact(factAp = it, trace) }
             },
             createEdge = { initial, final, trace ->
-                final.forEachFactWithAliases { this += CallToReturnFFact(initial, it, trace) }
+                final.forEachSourceFactWithAliases { this += CallToReturnFFact(initial, it, trace) }
             },
             createNDEdge = { initial, final, trace ->
-                final.forEachFactWithAliases { this += CallToReturnNonDistributiveFact(initial, it, trace) }
+                final.forEachSourceFactWithAliases { this += CallToReturnNonDistributiveFact(initial, it, trace) }
             }
         )
 
@@ -209,7 +210,7 @@ class JIRMethodCallFlowFunction(
         }
 
         applySinkRules(conditionRewriter, factReader, markAfterAnyFieldResolver).forEach { (fact, trace) ->
-            fact.forEachFactWithAliases {
+            fact.forEachSourceFactWithAliases {
                 addUnchecked(CallToReturnZFact(it, trace))
             }
         }
@@ -217,15 +218,15 @@ class JIRMethodCallFlowFunction(
         applySourceRules(
             initialFacts, conditionRewriter, factReader, exclusion,
             createFinalFact = { fact, trace ->
-                fact.forEachFactWithAliases { addCallToReturn(factReader, it, trace) }
+                fact.forEachSourceFactWithAliases { addCallToReturn(factReader, it, trace) }
             },
             createEdge = { initial, final, trace ->
-                final.forEachFactWithAliases {
+                final.forEachSourceFactWithAliases {
                     addUnchecked(CallToReturnFFact(initial, it, trace))
                 }
             },
             createNDEdge = { initial, final, trace ->
-                final.forEachFactWithAliases {
+                final.forEachSourceFactWithAliases {
                     addUnchecked(CallToReturnNonDistributiveFact(initial, it, trace))
                 }
             }
@@ -286,7 +287,9 @@ class JIRMethodCallFlowFunction(
         for (cleanerResult in cleanerResults) {
             val factReaderAfterCleaner = cleanerResult.fact
             if (factReaderAfterCleaner == null) {
-                val trace = cleanerResult.action?.let { TraceInfo.Rule(it.rule, it.action) }
+                val trace = cleanerResult.action
+                    ?.takeIf { it.rule.info is UserDefinedRuleInfo }
+                    ?.let { TraceInfo.Rule(it.rule, it.action) }
                 addCallToReturnUnchecked(MethodCallFlowFunction.Drop(trace))
                 continue
             }
@@ -342,10 +345,8 @@ class JIRMethodCallFlowFunction(
 
                     val trace = TraceInfo.Rule(evp.rule, evp.action)
 
-                    addCallToReturn(factReaderAfterCleaner, mappedFact, trace)
-
-                    analysisContext.aliasAnalysis?.forEachAliasAtStatement(statement, mappedFact) { aliased ->
-                        addCallToReturn(factReaderAfterCleaner, aliased, trace)
+                    mappedFact.forEachFactWithAliases(originalFactReader.factAp) {
+                        addCallToReturn(factReaderAfterCleaner, it, trace)
                     }
                 }
             }
@@ -628,10 +629,17 @@ class JIRMethodCallFlowFunction(
             FinalFactReaderWithPrefix(it, ElementAccessor)
         }
 
-    private inline fun FinalFactAp.forEachFactWithAliases(crossinline body: (FinalFactAp) -> Unit) {
+    private inline fun FinalFactAp.forEachSourceFactWithAliases(crossinline body: (FinalFactAp) -> Unit) =
+        forEachFactWithAliases(originalFact = null, body)
+
+    private inline fun FinalFactAp.forEachFactWithAliases(originalFact: FinalFactAp?,  crossinline body: (FinalFactAp) -> Unit) {
         body(this)
 
-        analysisContext.aliasAnalysis?.forEachAliasAtStatement(statement, this) { aliased ->
+        if (originalFact != null && originalFact == this) {
+            return
+        }
+
+        analysisContext.aliasAnalysis?.forEachAliasAfterCallStatement(statement, this) { aliased ->
             body(aliased)
         }
     }
