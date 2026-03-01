@@ -6,6 +6,9 @@ import org.seqra.dataflow.graph.CompactGraph
 import org.seqra.dataflow.graph.MethodInstGraph
 import org.seqra.dataflow.jvm.ap.ifds.JIRLanguageManager
 import org.seqra.dataflow.jvm.ap.ifds.JIRLocalAliasAnalysis
+import org.seqra.dataflow.jvm.ap.ifds.JIRLocalAliasAnalysis.AliasAccessor
+import org.seqra.dataflow.jvm.ap.ifds.JIRLocalAliasAnalysis.AliasAllocInfo
+import org.seqra.dataflow.jvm.ap.ifds.JIRLocalAliasAnalysis.AliasApInfo
 import org.seqra.dataflow.jvm.ap.ifds.JIRLocalAliasAnalysis.AliasInfo
 import org.seqra.dataflow.jvm.ap.ifds.alias.DSUAliasAnalysis.AAInfo
 import org.seqra.dataflow.jvm.ap.ifds.alias.DSUAliasAnalysis.ArrayAlias
@@ -93,25 +96,28 @@ class JIRIntraProcAliasAnalysis(
     }
 
     private fun AAInfo.convertToAliasInfo(): AliasInfo? {
-        var cur = this
-        val accessors = mutableListOf<JIRLocalAliasAnalysis.AliasAccessor>()
+        val (nonHeapInfo, accessors) = convertHeapAccessors(this)
+        return convertBaseAccessor(nonHeapInfo, accessors)
+    }
+
+    private fun convertHeapAccessors(initial: AAInfo): Pair<AAInfo, List<AliasAccessor>> {
+        var cur = initial
+        val accessors = mutableListOf<AliasAccessor>()
         while (cur is HeapAlias) {
             when (cur) {
-                is FieldAlias -> {
-                    val field = cur.field
-                    accessors.add(
-                        JIRLocalAliasAnalysis.AliasAccessor.Field(
-                            field.enclosingClass.name,
-                            field.name,
-                            field.type.typeName
-                        )
-                    )
-                }
-
-                is ArrayAlias -> accessors.add(JIRLocalAliasAnalysis.AliasAccessor.Array)
+                is FieldAlias -> accessors.add(cur.field)
+                is ArrayAlias -> accessors.add(AliasAccessor.Array)
             }
             cur = cur.instance
         }
+
+        accessors.reverse()
+        val optimizedAccessors = accessors.ifEmpty { emptyList() }
+
+        return cur to optimizedAccessors
+    }
+
+    private fun convertBaseAccessor(cur: AAInfo, accessors: List<AliasAccessor>): AliasInfo? {
         val base = when (cur) {
             is LocalAlias.SimpleLoc -> when (val loc = cur.loc) {
                 is Local -> AccessPathBase.LocalVar(loc.idx)
@@ -119,16 +125,26 @@ class JIRIntraProcAliasAnalysis(
                 is RefValue.This -> AccessPathBase.This
                 is RefValue.Static -> AccessPathBase.ClassStatic(loc.type)
             }
+
             is LocalAlias.Alloc -> {
-                val assign = cur.stmt as? Stmt.Assign
-                val const = assign?.expr as? SimpleValue.RefConst
+                val assign = cur.stmt as? Stmt.Assign ?: return null
+
+                val const = assign.expr as? SimpleValue.RefConst
                 val stringConst = const?.expr as? JIRStringConstant
-                stringConst?.let { AccessPathBase.Constant("java.lang.String", it.value) }
+                if (stringConst == null) {
+                    if (accessors.isNotEmpty()) return null
+                    return AliasAllocInfo(assign.originalIdx)
+                }
+
+                AccessPathBase.Constant("java.lang.String", stringConst.value)
             }
+
             is CallReturn,
-            is Unknown -> null
+            is Unknown -> return null
+
             is HeapAlias -> error("unreachable")
         }
-        return base?.let { AliasInfo(it, if (accessors.isEmpty()) emptyList() else accessors) }
+
+        return AliasApInfo(base, accessors)
     }
 }

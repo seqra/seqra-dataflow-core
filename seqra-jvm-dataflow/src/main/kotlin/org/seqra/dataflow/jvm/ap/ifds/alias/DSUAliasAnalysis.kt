@@ -2,6 +2,7 @@ package org.seqra.dataflow.jvm.ap.ifds.alias
 
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap
+import org.seqra.dataflow.jvm.ap.ifds.JIRLocalAliasAnalysis.AliasAccessor
 import org.seqra.dataflow.jvm.ap.ifds.alias.JIRIntraProcAliasAnalysis.JIRInstGraph
 import org.seqra.dataflow.jvm.ap.ifds.alias.RefValue.Local
 import org.seqra.ir.api.jvm.JIRField
@@ -37,7 +38,7 @@ class DSUAliasAnalysis(
     )
 
     private object RootInstEvalContext : InstEvalContext {
-        override fun createThis(): RefValue = RefValue.This
+        override fun createThis(isOuter: Boolean): RefValue = RefValue.This(isOuter)
         override fun createArg(idx: Int): RefValue = RefValue.Arg(idx)
         override fun createLocal(idx: Int): Local = Local(idx, level = 0, ctx = 0)
     }
@@ -121,7 +122,7 @@ class DSUAliasAnalysis(
 
     data class FieldAlias(
         override val instance: AAInfo,
-        val field: JIRField,
+        val field: AliasAccessor.Field,
         override val depth: Int,
         override val isImmutable: Boolean,
     ) : HeapAlias
@@ -314,10 +315,15 @@ class DSUAliasAnalysis(
     }
 
     private fun createFieldAliasWrtLimit(instance: AAInfo, field: JIRField): FieldAlias? {
+        val f = AliasAccessor.Field(field.enclosingClass.name, field.name, field.type.typeName)
+        return createFieldAliasWrtLimit(instance, f, field.isFinal)
+    }
+
+    private fun createFieldAliasWrtLimit(instance: AAInfo, field: AliasAccessor.Field, fieldIsImmutable: Boolean): FieldAlias? {
         val immutability = when (instance) {
             is HeapAlias -> instance.isImmutable
             else -> true
-        } && field.isFinal
+        } && fieldIsImmutable
         return createHeapAliasWrtLimit(instance) { depth -> FieldAlias(instance, field, depth, immutability) }
     }
 
@@ -411,9 +417,9 @@ class DSUAliasAnalysis(
 
     private fun RefValue.isOuter(): Boolean = when (this) {
         is Local -> false
+        is RefValue.This -> isOuter
         is RefValue.Arg,
-        is RefValue.Static,
-        is RefValue.This -> true
+        is RefValue.Static -> true
     }
 
     private fun GraphAnalysisState.mapCallFinalStates(
@@ -498,7 +504,7 @@ class DSUAliasAnalysis(
 
                 when (this) {
                     is ArrayAlias -> createArrayAliasWrtLimit(instanceAlternative)
-                    is FieldAlias -> createFieldAliasWrtLimit(instanceAlternative, field)
+                    is FieldAlias -> createFieldAliasWrtLimit(instanceAlternative, field, isImmutable)
                 }
             }
         }

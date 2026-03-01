@@ -11,6 +11,7 @@ import org.seqra.dataflow.configuration.jvm.ConstantTrue
 import org.seqra.dataflow.configuration.jvm.ContainsMark
 import org.seqra.dataflow.configuration.jvm.IsConstant
 import org.seqra.dataflow.configuration.jvm.IsNull
+import org.seqra.dataflow.configuration.jvm.IsStaticField
 import org.seqra.dataflow.configuration.jvm.Not
 import org.seqra.dataflow.configuration.jvm.Or
 import org.seqra.dataflow.configuration.jvm.TypeMatches
@@ -31,4 +32,5 @@ interface ConditionRewriter : ConditionVisitor<Condition> {
     override fun visit(condition: ContainsMark): Condition = condition
     override fun visit(condition: TypeMatches): Condition = condition
     override fun visit(condition: TypeMatchesPattern): Condition = condition
+    override fun visit(condition: IsStaticField): Condition = condition
 }
